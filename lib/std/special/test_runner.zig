@@ -1,3 +1,21 @@
+//! Default test runner
+//! assume: OS environment
+//! assume: (sub)processes and multithreading possible
+//! assume: IPC via anonymous pipes possible
+//! assume: user ensures global state is properly initialized and reset/cleaned up
+
+// principle:
+// 2 binaries: compiler and test_runner
+// 1. compiler compiles main() in this file as test_runner
+// 2. compiler spawns test_runner as subprocess
+// 3. test_runner (control) spawns itself as subprocess (worker)
+// 4. on panic or finishing, message is written to pipe for control to read
+//    (subprocess has a custom panic handler)
+
+// limitation: can test only 1 panic per test block
+// unclear: are 2 binaries needed or can 1 binary have 2 panic handlers?
+// unclear: should there be a dedicated API or other checks to ensure stuff gets cleaned up?
+
 const std = @import("std");
 const io = std.io;
 const builtin = @import("builtin");
@@ -6,9 +24,14 @@ pub const io_mode: io.Mode = builtin.test_io_mode;
 
 var log_err_count: usize = 0;
 
-var args_buffer: [std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
+// TODO REVIEW
+// arg[0], arg[1], cwd should be 3*MAX_PATH_BYTES
+// why is not std.math.max(3*MAX_PATH_BYTES, std.mem.page_size) used ?
+// TODO missing explanation of sizes
+var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 
+// returns test_runner_path given as static buffer-backed memory into args_buffer
 fn processArgs() void {
     const args = std.process.argsAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
@@ -19,6 +42,7 @@ fn processArgs() void {
         std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
         @panic("Wrong number of command line arguments");
     }
+    std.testing.test_runner_exe_path = args[0];
     std.testing.zig_exe_path = args[1];
 }
 
@@ -30,6 +54,19 @@ pub fn main() void {
     }
     if (builtin.zig_backend == .stage1) processArgs();
     const test_fn_list = builtin.test_functions;
+
+    const cwd = std.process.getCwdAlloc(args_allocator.allocator()) catch {
+        @panic("Too many bytes passed over the CLI to the test runner");
+    }; // windows compatibility requires allocation
+    std.debug.print("cwd: {s}\n", .{cwd});
+    std.debug.print("test_runner_exe_path: {s}\n", .{std.testing.test_runner_exe_path});
+    std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
+
+    for (test_fn_list) |test_fn, i|
+        std.debug.print("{d} {s}\n", .{ i, test_fn.name });
+    // TODO get binary path => tests child_process
+    // TODO implement subprocess
+
     var ok_count: usize = 0;
     var skip_count: usize = 0;
     var fail_count: usize = 0;
