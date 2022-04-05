@@ -1,8 +1,9 @@
 //! Default test runner
 //! assume: OS environment
 //! assume: (sub)processes and multithreading possible
-//! assume: IPC via anonymous pipes possible
-//! assume: user ensures global state is properly initialized and reset/cleaned up
+//! assume: IPC via pipes possible
+//! assume: User ensures global state is properly initialized and reset/cleaned up
+//!         between test blocks. The order of test execution **must not matter**.
 
 // principle:
 // 2 binaries: compiler and test_runner
@@ -10,7 +11,17 @@
 // 2. compiler spawns test_runner as subprocess
 // 3. test_runner (control) spawns itself as subprocess (worker)
 // 4. on panic or finishing, message is written to pipe for control to read
-//    (subprocess has a custom panic handler)
+//    (worker has a custom panic handler to write panic message)
+// communication via IPCs stdin, stdout, stderr, exitout (exit code of each test block)
+
+// compiler --spawns--> control  --spawn at testfn 0   -->          worker
+//    |                    |    <--testfn_exit_status 0--             |
+//    |                    |    <--testfn_exit_status 1--             |
+//    |                    |             ...                          |
+//    |                    |    <--exitout: testfn_exit_status x--    |
+//    |                    |    <--stdout: panic_msg--                |
+//    |                    |     --spawn at testfn x+1-->             |
+//    |                    |                                          |
 
 // limitation: can test only 1 panic per test block
 // unclear: are 2 binaries needed or can 1 binary have 2 panic handlers?
@@ -64,6 +75,7 @@ pub fn main() void {
 
     for (test_fn_list) |test_fn, i|
         std.debug.print("{d} {s}\n", .{ i, test_fn.name });
+
     // TODO get binary path => tests child_process
     // TODO implement subprocess
 

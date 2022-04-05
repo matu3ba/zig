@@ -1,0 +1,67 @@
+test_runner.zig:
+
+- [x] document default test_runner assumptions
+- [x] document default test_runner interaction that is planned
+- [ ] improve child_process to have an arbitrary amount of pipes with 3 being default:
+      stdout, stderr, stdin
+- [ ] prototype exitout pipe as additional pipe worker->control
+- [ ] exitout pipe as additional pipe worker->control
+- [ ] "portable inspired signal communication via pipes" (strip down POSIX signals)
+- [ ] plan for parallelized execution of test blocks or how this should work in build.zig
+- [ ] clarify all TODOs
+- [ ] complicates test_runner => should this be another test_runner?
+- [ ] how can we come up with a test runner lib to customize your own?
+      * what stuff is strictly necessary?
+      * what stuff is not necessary?
+      * how to minimize maintenance cost, while ensuring all necessary necessary edge cases are tested?
+
+
+- have a way to list+enumerate all tests inclusive their respective test blocks
+  * done:
+    for (test_fn_list) |test_fn, i|
+        std.debug.print("{d} {s}\n", .{ i, test_fn.name });
+
+- figure out how to create another pipe between processes for the control plane
+(stdin,stdout and stderr are for data only! no complex parsing shennanigans or signaling etc
+unless there is significant performance gain)
+--verbose or --debug to let each process write with timestamp to file
+=> figure out what the Kernel provides (multithreading works, but multiprocesses?)
+TODO spawn subprocess to write status
+
+- custom panic handler + cleanup routine (try not to deal with stage1 having weird behavior
+User-defined test runner #6621 (comment))
+
+
+----- PERSONAL NOTES -----
+It is now possible to 1. build tests without running them and 2. using custom test commands, 3. switching the test runner which is sufficient to get things working:
+```txt
+    \\Test Options:
+    \\  --test-filter [text]           Skip tests that do not match filter
+    \\  --test-name-prefix [text]      Add prefix to all tests
+    \\  --test-cmd [arg]               Specify test execution command one arg at a time
+    \\  --test-cmd-bin                 Appends test binary path to test cmd args
+    \\  --test-evented-io              Runs the test in evented I/O mode
+    \\  --test-no-exec                 Compiles test binary without running it
+```
+
+What is missing potential are nice to haves, but complicate things
+1. benchmarks (e.g. if the function name starts with "bench_")
+2. parallel execution
+3. testing time
+1. Meaningful benchmarks require system control (either idle) and have no complexity limit,
+so they are a bad target for functional tests inside continuous integration and are
+better used in build.zig after establishing necessary conditions.
+2. Parallel execution probably means multi-threading,
+which can influence memory stuff in the same process. It is only useful,
+if potential memory problems are explicitly accepted by the user.
+3. Testing time is captured by the CI or can easily be captured by `build.zig`,
+so it has no additional benefit.
+To me point 2 sounds worth maintaining inside libstd for imminent user-interaction
+inside the REPL, but no complexity+maintenance estimation vs the benefit was given,
+so I suspect limited applicability to offer parallelization of test execution
+inside a process.
+To me the solution for custom runners looks like a hack to set a file as `root`
+from within the file, which makes the behavior from `build.zig` non-trivial since
+it doesnt execute what the reader of `build.zig` expects.
+If the user wants a custom test runner, the user can use aforementioned commands
+to build and run the test binary.
