@@ -2,8 +2,9 @@
 //! assume: OS environment
 //! assume: (sub)processes and multithreading possible
 //! assume: IPC via pipes possible
-//! assume: User ensures global state is properly initialized and reset/cleaned up
-//!         between test blocks. The order of test execution **must not matter**.
+//! assume: The order of test execution **must not matter**.
+//!         User ensures global state is properly initialized and
+//!         reset/cleaned up between test blocks.
 
 // principle:
 // 2 binaries: compiler and test_runner
@@ -12,18 +13,21 @@
 // 3. test_runner (control) spawns itself as subprocess (worker)
 // 4. on panic or finishing, message is written to pipe for control to read
 //    (worker has a custom panic handler to write panic message)
-// communication via IPCs stdin, stdout, stderr, exitout (exit code of each test block)
+// communication via IPCs stdin, stdout, stderr, testout (exit code of each test block)
 
-// compiler --spawns--> control  --spawn at testfn 0   -->          worker
-//    |                    |    <--testfn_exit_status 0--             |
-//    |                    |    <--testfn_exit_status 1--             |
-//    |                    |             ...                          |
-//    |                    |    <--exitout: testfn_exit_status x--    |
-//    |                    |    <--stdout: panic_msg--                |
-//    |                    |     --spawn at testfn x+1-->             |
-//    |                    |                                          |
+// compiler
+//    | --spawns--> control
+//    |                |       --spawn at testfn0-->                worker
+//    |                |      <--testout: testfn_exit_status0 0--      |
+//    |                |      <--testout: testfn_exit_status1 0--      |
+//    |                |                 ...                           |
+//    |                |      <--testout: testfn_exit_statusx msglen-- |
+//    |                |      <--stdout: panic_msg--                   |
+//    | <--(unexpected panic_msg) stderr: panic_msg+context(for CI)--  |
+//    |                |       --spawn at testfnx+1-->                 |
+//    |                |                                               |
 
-// limitation: can test only 1 panic per test block
+// limitation: can test only 1 panic per test block (testfn)
 // unclear: are 2 binaries needed or can 1 binary have 2 panic handlers?
 // unclear: should there be a dedicated API or other checks to ensure stuff gets cleaned up?
 
@@ -42,28 +46,58 @@ var log_err_count: usize = 0;
 var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 
-// returns test_runner_path given as static buffer-backed memory into args_buffer
-fn processArgs() void {
+const State = enum {
+    Control,
+    Worker,
+};
+
+// args 0:testbinary, 1:compilerbinary, nonpositional: --worker,
+//      TODO later:
+//      --trace FILE (includes timestamps),
+//      --bench (IPC Kernel overhead can vary and is hard to measure),
+//      --parallel (user-encoded dependencies),
+fn processArgs() State {
+    var state = State.Control;
     const args = std.process.argsAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
     };
-    if (args.len != 2) {
-        const self_name = if (args.len >= 1) args[0] else if (builtin.os.tag == .windows) "test.exe" else "test";
-        const zig_ext = if (builtin.os.tag == .windows) ".exe" else "";
+    const self_name = if (args.len >= 1) args[0] else if (builtin.os.tag == .windows) "test.exe" else "test";
+    const zig_ext = if (builtin.os.tag == .windows) ".exe" else "";
+    if (args.len < 2 or 3 < args.len) {
         std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
         @panic("Wrong number of command line arguments");
     }
+    if (args.len == 3) {
+        if (!std.mem.eql(u8, args[2], "--worker")) {
+            std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
+            @panic("Found args[2] != '--worker'");
+        }
+        state = State.Worker;
+    }
     std.testing.test_runner_exe_path = args[0];
     std.testing.zig_exe_path = args[1];
+    return state;
 }
 
+//if (args.len < 2 or args.len > 3) {
+//    const self_name = if (args.len >= 1) args[0] else if (builtin.os.tag == .windows) "test.exe" else "test";
+//    const zig_ext = if (builtin.os.tag == .windows) ".exe" else "";
+//    std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
+//    @panic("Wrong number of command line arguments");
+//}
+
+// TODO extend, --verbose etc?
+// args: path_to_testbinary, path_to_zigbinary, [--worker]
 pub fn main() void {
     if (builtin.zig_backend != .stage1 and
         (builtin.zig_backend != .stage2_llvm or builtin.cpu.arch == .wasm32))
     {
         return main2() catch @panic("test failure");
     }
-    if (builtin.zig_backend == .stage1) processArgs();
+    //TODO figure out, what requiers builtin guard: std.testing globals?
+    //if (builtin.zig_backend == .stage1)
+    const state = processArgs();
+    _ = state;
     const test_fn_list = builtin.test_functions;
 
     const cwd = std.process.getCwdAlloc(args_allocator.allocator()) catch {
@@ -72,6 +106,23 @@ pub fn main() void {
     std.debug.print("cwd: {s}\n", .{cwd});
     std.debug.print("test_runner_exe_path: {s}\n", .{std.testing.test_runner_exe_path});
     std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
+
+    if (state == State.Control) {
+        // 1. child_process with --worker
+        // 2. wait
+        // 3. read testout from child_process (pipe) [status data_size_in_bytes\nstatus..]
+        // 4. read stdout from child_process (pipe) [data(size_in_bytes),data(size_in_bytes)..]
+        // 5. check exit status/signal status of child (OOM/error on cleanup ressources)
+    } else {
+        // 1. start at given index
+        // 2. run test
+        // 3. write exit status + data for test,
+        //    - write to stdout/testout pipe or allocation can fail => special signal
+        // x. on panic call custom panic handler to dump panic message
+        //    to inherited stderr from compiler binary to dumb state to CI
+    } // state == State.Worker
+    // TODO: must exactly how many bytes were written to testout pipe
+    // for each test to read in the associated stdout pipe
 
     for (test_fn_list) |test_fn, i|
         std.debug.print("{d} {s}\n", .{ i, test_fn.name });

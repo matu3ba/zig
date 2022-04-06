@@ -3,8 +3,9 @@ test_runner.zig:
 - [x] document default test_runner assumptions
 - [x] document default test_runner interaction that is planned
 - [ ] improve child_process to have an arbitrary amount of pipes with 3 being default:
-      stdout, stderr, stdin
-- [ ] prototype exitout pipe as additional pipe worker->control
+      stdout, stderr, stdin OR roll custom ones (more bruh)
+- [ ] prototype testout pipe as additional pipe worker->control
+- [ ] prototype stderr pipe from additional pipe worker->compiler (CI)
 - [ ] exitout pipe as additional pipe worker->control
 - [ ] "portable inspired signal communication via pipes" (strip down POSIX signals)
 - [ ] plan for parallelized execution of test blocks or how this should work in build.zig
