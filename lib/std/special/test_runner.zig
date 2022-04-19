@@ -6,6 +6,7 @@
 //!         User ensures global state is properly initialized and
 //!         reset/cleaned up between test blocks.
 //! assume: User does not need additional messages besides test_name + number
+//! assume: ports 9084, 9085 usable for localhost tcp (Zig Test, ascii ZT: 90, 84)
 //! assert: User writes only 1 expectPanic per test block.
 //!         Improving this requires to keep track of expect* functions in test blocks
 //!         in Compilation.zig and have a convention how to initialize shared state.
@@ -45,12 +46,24 @@ const std = @import("std");
 const io = std.io;
 const builtin = @import("builtin");
 
+const net = std.x.net;
+const os = std.x.os;
+const ip = net.ip;
+const tcp = net.tcp;
+const IPv4 = os.IPv4;
+const IPv6 = os.IPv6;
+const Socket = os.Socket;
+const Buffer = os.Buffer;
+const have_ifnamesize = @hasDecl(std.os.system, "IFNAMESIZE"); // interface namesize
+const ChildProcess = std.ChildProcess;
+
 pub const io_mode: io.Mode = builtin.test_io_mode;
 
 var log_err_count: usize = 0;
 
 // TODO REVIEW: why is not std.math.max(3*MAX_PATH_BYTES, std.mem.page_size) used ?
 // paths arg[0], arg[1], cwd with each using as worst case MAX_PATH_BYTES
+// TODO tcp code sizes (provide stubs for worst case string representation)
 var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 
@@ -59,9 +72,73 @@ const State = enum {
     Worker,
 };
 
-// args 0:testbinary, 1:compilerbinary, nonpositional: --worker,
+// running on raw sockets is not possible without additional permissions
+// https://squidarth.com/networking/systems/rc/2018/05/28/using-raw-sockets.html
+// only alternative: tcp/udp
+const TcpIo = struct {
+    state: State,
+    // ip always localhost (ie 127.0.0.1)
+    port_ctrl: u16 = 9084,
+    port_data: u16 = 9085,
+    ctrl: union {
+        listener: tcp.Listener,
+        client: tcp.Client,
+    },
+    data: union {
+        listener: tcp.Listener,
+        client: tcp.Client,
+    },
+    addr_ctrl: ip.Address,
+    addr_data: ip.Address,
+    conn_ctrl: tcp.Connection,
+    conn_data: tcp.Connection,
+
+    fn setup(state: State) !TcpIo {
+        var tcpio = TcpIo{
+            .state = state,
+            .ctrl = undefined,
+            .data = undefined,
+            .addr_ctrl = undefined,
+            .addr_data = undefined,
+            .conn_ctrl = undefined,
+            .conn_data = undefined,
+        };
+
+        switch (state) {
+            State.Control => {
+                tcpio.ctrl = .{ .listener = try tcp.Listener.init(.ip, .{ .close_on_exec = true }) };
+                tcpio.data = .{ .listener = try tcp.Listener.init(.ip, .{ .close_on_exec = true }) };
+                try tcpio.ctrl.listener.bind(ip.Address.initIPv4(IPv4.unspecified, tcpio.port_ctrl));
+                try tcpio.data.listener.bind(ip.Address.initIPv4(IPv4.unspecified, tcpio.port_data));
+                try tcpio.ctrl.listener.listen(1);
+                try tcpio.data.listener.listen(1);
+                tcpio.addr_ctrl = try tcpio.ctrl.listener.getLocalAddress();
+                tcpio.addr_data = try tcpio.data.listener.getLocalAddress();
+                switch (tcpio.addr_ctrl) {
+                    .ipv4 => |*ipv4| ipv4.host = IPv4.localhost,
+                    .ipv6 => unreachable,
+                }
+                switch (tcpio.addr_data) {
+                    .ipv4 => |*ipv4| ipv4.host = IPv4.localhost,
+                    .ipv6 => unreachable,
+                }
+            },
+            State.Worker => {
+                tcpio.ctrl = .{ .client = try tcp.Client.init(.ip, .{ .close_on_exec = true }) };
+                tcpio.data = .{ .client = try tcp.Client.init(.ip, .{ .close_on_exec = true }) };
+                const s_localhost = "127.0.0.1"; // HACK around libstd
+                const localhost = try IPv4.parse(s_localhost);
+                tcpio.addr_ctrl = ip.Address.initIPv4(localhost, tcpio.port_ctrl);
+                tcpio.addr_data = ip.Address.initIPv4(localhost, tcpio.port_data);
+            },
+        }
+        return tcpio;
+    }
+};
+
+// args 0:testbinary, 1:compilerbinary,
+// [2-4: --worker, port_ctrl, port_data]
 fn processArgs() State {
-    var state = State.Control;
     const args = std.process.argsAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
     };
@@ -71,6 +148,7 @@ fn processArgs() State {
         std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
         @panic("Wrong number of command line arguments");
     }
+    var state = State.Control;
     if (args.len == 3) {
         if (!std.mem.eql(u8, args[2], "--worker")) {
             std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
@@ -84,16 +162,17 @@ fn processArgs() State {
 }
 
 // args: path_to_testbinary, path_to_zigbinary, [--worker]
-pub fn main() void {
+pub fn main() !void {
+    if (!have_ifnamesize) return error.FAILURE;
+
     if (builtin.zig_backend != .stage1 and
         (builtin.zig_backend != .stage2_llvm or builtin.cpu.arch == .wasm32))
     {
         return main2() catch @panic("test failure");
     }
-    //TODO figure out, what requiers builtin guard: std.testing globals?
-    //if (builtin.zig_backend == .stage1)
-    const state = processArgs();
-    _ = state;
+    var state = processArgs();
+    var tcpio = TcpIo.setup(state) catch unreachable;
+
     const test_fn_list = builtin.test_functions;
 
     const cwd = std.process.getCwdAlloc(args_allocator.allocator()) catch {
@@ -103,13 +182,52 @@ pub fn main() void {
     std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
     std.debug.print("cwd: {s}\n", .{cwd});
 
-    if (state == State.Control) {
-        // 1. child_process with --worker
+    // TODO path to current binary
+    if (tcpio.state == State.Control) {
+        const args = [_][]const u8{
+            std.testing.test_runner_exe_path,
+            std.testing.zig_exe_path,
+            "--worker",
+        };
+        var child_proc = try ChildProcess.init(&args, std.testing.allocator);
+        defer child_proc.deinit();
+        try child_proc.spawn();
+        std.debug.print("child_proc spawned:\n", .{});
+        std.debug.print("args {s}\n", .{args});
+
+        tcpio.conn_ctrl = try tcpio.ctrl.listener.accept(.{ .close_on_exec = true }); // accept is blocking
+        tcpio.conn_data = try tcpio.data.listener.accept(.{ .close_on_exec = true }); // accept is blocking
+        defer tcpio.conn_ctrl.deinit();
+        defer tcpio.conn_data.deinit();
+        std.debug.print("connections succesful\n", .{});
+        const message = "hello world";
+        var buf: [message.len + 1]u8 = undefined;
+        var msg = Socket.Message.fromBuffers(&[_]Buffer{
+            Buffer.from(buf[0 .. message.len / 2]),
+            Buffer.from(buf[message.len / 2 ..]),
+        });
+        _ = try tcpio.conn_ctrl.client.readMessage(&msg, 0);
+        try std.testing.expectEqualStrings(message, buf[0..message.len]);
+        std.debug.print("comparison successful\n", .{});
+
+        const ret_val = child_proc.wait();
+        try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
+        std.debug.print("server exited\n", .{});
+
+        // 1. spawn child_process with --worker
         // 2. wait
         // 3. read testout from child_process (pipe) [status data_size_in_bytes\nstatus..]
         // 4. read stdout from child_process (pipe) [data(size_in_bytes),data(size_in_bytes)..]
         // 5. check exit status/signal status of child (OOM/error on cleanup ressources)
     } else {
+        try tcpio.ctrl.client.connect(tcpio.addr_ctrl);
+        try tcpio.data.client.connect(tcpio.addr_data);
+
+        const message = "hello world";
+        _ = try tcpio.ctrl.client.writeMessage(Socket.Message.fromBuffers(&[_]Buffer{
+            Buffer.from(message[0 .. message.len / 2]),
+            Buffer.from(message[message.len / 2 ..]),
+        }), 0);
         // 1. start at given index
         // 2. run test
         // 3. write exit status + data for test,
