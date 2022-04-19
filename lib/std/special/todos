@@ -1,21 +1,34 @@
+next: code integration
+
+1. list of functions + expected status code (panic or no panic)
+2. make status codes configurable?
+3. test.expectPanic in libstd (expectPanic failure => return error.NoPanic)
+4. noreturn after test.expectPanic code branch
+5. figuring out the corner cases of various kernels etc
+
 test_runner.zig:
 
 - [x] document default test_runner assumptions
 - [x] document default test_runner interaction that is planned
-- [ ] improve child_process to have an arbitrary amount of pipes with 3 being default:
-      stdout, stderr, stdin OR roll custom ones (more bruh)
-- [ ] prototype testout pipe as additional pipe worker->control
-- [ ] prototype stderr pipe from additional pipe worker->compiler (CI)
-- [ ] exitout pipe as additional pipe worker->control
-- [ ] "portable inspired signal communication via pipes" (strip down POSIX signals)
-- [ ] plan for parallelized execution of test blocks or how this should work in build.zig
-- [ ] clarify all TODOs
+- [x] prototype tcp communication between server and client
+- [ ] args parsing
+- [ ] writing results from tcp
+- [ ] expectPanic with adding noreturn, if possible
+- [ ] panic message encoding in worker
+- [ ] panic message checking in control
+- [ ] panic comparison to expected result
+
+not in scope of PR:
+- [ ] plan for parallelized execution of test blocks or how this should work in build.zig?
+      must be user-written and make test_runner unnecessary complex
+      simpler: test_runner libraries for user-crafting of test runner. :)
+      does the same go for panic handler?
+- [ ] "portable inspired signal communication via pipes" (strip down POSIX signals)?
 - [ ] complicates test_runner => should this be another test_runner?
 - [ ] how can we come up with a test runner lib to customize your own?
       * what stuff is strictly necessary?
       * what stuff is not necessary?
       * how to minimize maintenance cost, while ensuring all necessary necessary edge cases are tested?
-
 
 - have a way to list+enumerate all tests inclusive their respective test blocks
   * done:

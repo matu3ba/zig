@@ -5,31 +5,41 @@
 //! assume: The order of test execution **must not matter**.
 //!         User ensures global state is properly initialized and
 //!         reset/cleaned up between test blocks.
+//! assume: User does not need additional messages besides test_name + number
+//! assert: User writes only 1 expectPanic per test block.
+//!         Improving this requires to keep track of expect* functions in test blocks
+//!         in Compilation.zig and have a convention how to initialize shared state.
+
+// unclear: are 2 binaries needed or can 1 binary have 2 panic handlers?
+//          could the panic handler be given information where to write the panic?
+//          should we generalize this concept at comptime?
+// unclear: dedicated API or other checks to ensure things gets cleaned up?
 
 // principle:
 // 2 binaries: compiler and test_runner
 // 1. compiler compiles main() in this file as test_runner
 // 2. compiler spawns test_runner as subprocess
 // 3. test_runner (control) spawns itself as subprocess (worker)
-// 4. on panic or finishing, message is written to pipe for control to read
-//    (worker has a custom panic handler to write panic message)
-// communication via IPCs stdin, stdout, stderr, testout (exit code of each test block)
+// 4. on panic or finishing, message is written to socket for control to read
+//    (worker has a custom panic handler to write panic message to the socket)
+// communication via 2 sockets:
+//     - 1. testnumber testnumber_exitstatus msglen
+//     - 2. testout with data
+// copying the memory from tcp socket to pipe for error message is still necessary
+// https://stackoverflow.com/questions/11847793/are-tcp-socket-handles-inheritable
 
 // compiler
-//    | --spawns--> control
-//    |                |       --spawn at testfn0-->                worker
-//    |                |      <--testout: testfn_exit_status0 0--      |
-//    |                |      <--testout: testfn_exit_status1 0--      |
-//    |                |                 ...                           |
-//    |                |      <--testout: testfn_exit_statusx msglen-- |
-//    |                |      <--stdout: panic_msg--                   |
-//    | <--(unexpected panic_msg) stderr: panic_msg+context(for CI)--  |
-//    |                |       --spawn at testfnx+1-->                 |
-//    |                |                                               |
-
-// limitation: can test only 1 panic per test block (testfn)
-// unclear: are 2 binaries needed or can 1 binary have 2 panic handlers?
-// unclear: should there be a dedicated API or other checks to ensure stuff gets cleaned up?
+//    |  --spawns-->  control
+//    |                  |       --spawn at testfn0-->                worker
+//    |                  |      <--testout: testfn0_exit_status 0--      |
+//    |                  |      <--testout: testfn1_exit_status 0--      |
+//    |                  |                 ...                           |
+//    |                  |      <--testout: testfnx_exit_status msglen-- |
+//    |                  |      <--stdout: panic_msg--                   |
+//    | (<--panic_msg--) |                                               |
+//    |                  |       --spawn at testfnx+1-->                 |
+//    |                  |                                               |
+// unclear: should we special case 1.panic_msg, 2. panic_msg+context ?
 
 const std = @import("std");
 const io = std.io;
@@ -39,10 +49,8 @@ pub const io_mode: io.Mode = builtin.test_io_mode;
 
 var log_err_count: usize = 0;
 
-// TODO REVIEW
-// arg[0], arg[1], cwd should be 3*MAX_PATH_BYTES
-// why is not std.math.max(3*MAX_PATH_BYTES, std.mem.page_size) used ?
-// TODO missing explanation of sizes
+// TODO REVIEW: why is not std.math.max(3*MAX_PATH_BYTES, std.mem.page_size) used ?
+// paths arg[0], arg[1], cwd with each using as worst case MAX_PATH_BYTES
 var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 
@@ -52,10 +60,6 @@ const State = enum {
 };
 
 // args 0:testbinary, 1:compilerbinary, nonpositional: --worker,
-//      TODO later:
-//      --trace FILE (includes timestamps),
-//      --bench (IPC Kernel overhead can vary and is hard to measure),
-//      --parallel (user-encoded dependencies),
 fn processArgs() State {
     var state = State.Control;
     const args = std.process.argsAlloc(args_allocator.allocator()) catch {
@@ -79,14 +83,6 @@ fn processArgs() State {
     return state;
 }
 
-//if (args.len < 2 or args.len > 3) {
-//    const self_name = if (args.len >= 1) args[0] else if (builtin.os.tag == .windows) "test.exe" else "test";
-//    const zig_ext = if (builtin.os.tag == .windows) ".exe" else "";
-//    std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
-//    @panic("Wrong number of command line arguments");
-//}
-
-// TODO extend, --verbose etc?
 // args: path_to_testbinary, path_to_zigbinary, [--worker]
 pub fn main() void {
     if (builtin.zig_backend != .stage1 and
@@ -103,9 +99,9 @@ pub fn main() void {
     const cwd = std.process.getCwdAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
     }; // windows compatibility requires allocation
-    std.debug.print("cwd: {s}\n", .{cwd});
     std.debug.print("test_runner_exe_path: {s}\n", .{std.testing.test_runner_exe_path});
     std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
+    std.debug.print("cwd: {s}\n", .{cwd});
 
     if (state == State.Control) {
         // 1. child_process with --worker
@@ -118,17 +114,13 @@ pub fn main() void {
         // 2. run test
         // 3. write exit status + data for test,
         //    - write to stdout/testout pipe or allocation can fail => special signal
-        // x. on panic call custom panic handler to dump panic message
-        //    to inherited stderr from compiler binary to dumb state to CI
+        // x. on panic call custom panic handler to write header + panic message
     } // state == State.Worker
     // TODO: must exactly how many bytes were written to testout pipe
     // for each test to read in the associated stdout pipe
 
     for (test_fn_list) |test_fn, i|
         std.debug.print("{d} {s}\n", .{ i, test_fn.name });
-
-    // TODO get binary path => tests child_process
-    // TODO implement subprocess
 
     var ok_count: usize = 0;
     var skip_count: usize = 0;
