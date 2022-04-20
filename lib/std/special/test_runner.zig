@@ -62,7 +62,9 @@ pub const io_mode: io.Mode = builtin.test_io_mode;
 var log_err_count: usize = 0;
 
 // TODO REVIEW: why is not std.math.max(3*MAX_PATH_BYTES, std.mem.page_size) used ?
-// paths arg[0], arg[1], cwd with each using as worst case MAX_PATH_BYTES
+// paths arg[0], arg[1], --worker --start-index cwd u64_max_string
+// with each using as worst case MAX_PATH_BYTES
+// TODO reserved size into libstd
 // TODO tcp code sizes (provide stubs for worst case string representation)
 var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
@@ -70,6 +72,11 @@ var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 const State = enum {
     Control,
     Worker,
+};
+
+const Cli = struct {
+    state: State,
+    start_index: u64,
 };
 
 // running on raw sockets is not possible without additional permissions
@@ -136,32 +143,48 @@ const TcpIo = struct {
     }
 };
 
-// args 0:testbinary, 1:compilerbinary,
-// [2-4: --worker, port_ctrl, port_data]
-fn processArgs() State {
+// args 0:testbinary, 1:compilerbinary, [2: --worker]
+fn processArgs() Cli {
     const args = std.process.argsAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
     };
     const self_name = if (args.len >= 1) args[0] else if (builtin.os.tag == .windows) "test.exe" else "test";
     const zig_ext = if (builtin.os.tag == .windows) ".exe" else "";
-    if (args.len < 2 or 3 < args.len) {
+    if (args.len < 2 or 5 < args.len) {
         std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
         @panic("Wrong number of command line arguments");
     }
-    var state = State.Control;
-    if (args.len == 3) {
+    var cli = Cli{
+        .state = State.Control,
+        .start_index = 0,
+    };
+    if (args.len == 3 or args.len == 5) {
         if (!std.mem.eql(u8, args[2], "--worker")) {
             std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
             @panic("Found args[2] != '--worker'");
         }
-        state = State.Worker;
+        cli.state = State.Worker;
+    }
+    if (args.len == 4) {
+        if (!std.mem.eql(u8, args[2], "--start-index")) {
+            std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
+            @panic("Found args[2] != '--start-index'");
+        }
+        cli.start_index = std.fmt.parseUnsigned(u64, args[3], 10) catch unreachable;
+    }
+    if (args.len == 5) {
+        if (!std.mem.eql(u8, args[3], "--start-index")) {
+            std.debug.print("Usage: {s} path/to/zig{s}\n", .{ self_name, zig_ext });
+            @panic("Found args[2] != '--start-index'");
+        }
+        cli.start_index = std.fmt.parseUnsigned(u64, args[4], 10) catch unreachable;
     }
     std.testing.test_runner_exe_path = args[0];
     std.testing.zig_exe_path = args[1];
-    return state;
+    return cli;
 }
 
-// args: path_to_testbinary, path_to_zigbinary, [--worker]
+// args: path_to_testbinary, path_to_zigbinary, [--worker, --start-index 0]
 pub fn main() !void {
     if (!have_ifnamesize) return error.FAILURE;
 
@@ -170,84 +193,101 @@ pub fn main() !void {
     {
         return main2() catch @panic("test failure");
     }
-    var state = processArgs();
-    var tcpio = TcpIo.setup(state) catch unreachable;
+    var cli = processArgs();
+    var tcpio = TcpIo.setup(cli.state) catch unreachable;
 
     const test_fn_list = builtin.test_functions;
 
     const cwd = std.process.getCwdAlloc(args_allocator.allocator()) catch {
         @panic("Too many bytes passed over the CLI to the test runner");
     }; // windows compatibility requires allocation
-    std.debug.print("test_runner_exe_path: {s}\n", .{std.testing.test_runner_exe_path});
-    std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
-    std.debug.print("cwd: {s}\n", .{cwd});
+    std.debug.print("test_runner_exe_path zig_exe_path cli.start_index\n", .{});
+    std.debug.print("{s} {s} --start-index {d}\n", .{ std.testing.test_runner_exe_path, std.testing.zig_exe_path, cli.start_index });
+    std.debug.print("--cwd: {s}\n", .{cwd});
 
-    if (tcpio.state == State.Control) {
-        const args = [_][]const u8{
-            std.testing.test_runner_exe_path,
-            std.testing.zig_exe_path,
-            "--worker",
-        };
-        var child_proc = try ChildProcess.init(&args, std.testing.allocator);
-        defer child_proc.deinit();
-        try child_proc.spawn();
-        std.debug.print("child_proc spawned:\n", .{});
-        std.debug.print("args {s}\n", .{args});
+    // len("2**64-1")= len("18446744073709551615") = 20
+    // TODO add constants to libstd
+    var buf_start_index = std.mem.Allocator.alloc(args_allocator.allocator(), u8, 20) catch unreachable;
 
-        tcpio.conn_ctrl = try tcpio.ctrl.listener.accept(.{ .close_on_exec = true }); // accept is blocking
-        tcpio.conn_data = try tcpio.data.listener.accept(.{ .close_on_exec = true }); // accept is blocking
-        defer tcpio.conn_ctrl.deinit();
-        defer tcpio.conn_data.deinit();
-        std.debug.print("connections succesful\n", .{});
+    switch (tcpio.state) {
+        State.Control => {
+            while (cli.start_index < test_fn_list.len) : (cli.start_index += 1) {
+                //TODO parse executed test into cur_index
+                //update cli.start_index by checking, if start_index + 1 == cur_index
+            }
 
-        // respawn child_process until we reach test_fn.len:
-        //   after wait():
-        //   if ret_val == 0
-        //     print OK of all messages
-        //   else
-        //     if messages in ctrl empty:
-        //       print unexpected panic during test: got no panic message(s)
-        //     else
-        //       if message == expected_message
-        //         print OK of current test_fn (other OKs were printed by child_process)
-        //         continue;
-        //       else
-        //         print fatal, got 'message', expected 'expected_message'
-        //
-        //
-        // panic message formatting:
-        // 1. panic message must be allocated
-        // 2. ctrl: test_fn_number exit_code msglen msg ?
-        // 3. alternative is to use data: msg
+            const s_start_index = std.fmt.bufPrint(buf_start_index[0..], "{d}", .{cli.start_index}) catch unreachable;
+            std.debug.print("s_start_index.len: {d}\n", .{s_start_index.len});
 
-        const message = "hello world";
-        var buf: [message.len + 1]u8 = undefined;
-        var msg = Socket.Message.fromBuffers(&[_]Buffer{
-            Buffer.from(buf[0 .. message.len / 2]),
-            Buffer.from(buf[message.len / 2 ..]),
-        });
-        _ = try tcpio.conn_ctrl.client.readMessage(&msg, 0);
-        try std.testing.expectEqualStrings(message, buf[0..message.len]);
-        std.debug.print("comparison successful\n", .{});
+            const args = [_][]const u8{
+                std.testing.test_runner_exe_path,
+                std.testing.zig_exe_path,
+                "--worker",
+                "--start-index",
+                s_start_index,
+            };
+            var child_proc = try ChildProcess.init(&args, std.testing.allocator);
+            defer child_proc.deinit();
+            try child_proc.spawn();
+            std.debug.print("child_proc spawned:\n", .{});
+            std.debug.print("args {s}\n", .{args});
 
-        const ret_val = child_proc.wait();
-        try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
-        std.debug.print("server exited\n", .{});
+            tcpio.conn_ctrl = try tcpio.ctrl.listener.accept(.{ .close_on_exec = true }); // accept is blocking
+            tcpio.conn_data = try tcpio.data.listener.accept(.{ .close_on_exec = true }); // accept is blocking
+            defer tcpio.conn_ctrl.deinit();
+            defer tcpio.conn_data.deinit();
+            std.debug.print("connections succesful\n", .{});
 
-        for (test_fn_list) |test_fn, i|
-            std.debug.print("{d} {s}\n", .{ i, test_fn.name });
-    } else {
-        try tcpio.ctrl.client.connect(tcpio.addr_ctrl);
-        try tcpio.data.client.connect(tcpio.addr_data);
+            // respawn child_process until we reach test_fn.len:
+            //   after wait():
+            //   if ret_val == 0
+            //     print OK of all messages
+            //   else
+            //     if messages in ctrl empty:
+            //       print unexpected panic during test: got no panic message(s)
+            //     else
+            //       if message == expected_message
+            //         print OK of current test_fn (other OKs were printed by child_process)
+            //         continue;
+            //       else
+            //         print fatal, got 'message', expected 'expected_message'
+            //
+            //
+            // panic message formatting:
+            // 1. panic message must be allocated
+            // 2. ctrl: test_fn_number exit_code msglen msg ?
+            // 3. alternative is to use data: msg
 
-        const message = "hello world";
-        _ = try tcpio.ctrl.client.writeMessage(Socket.Message.fromBuffers(&[_]Buffer{
-            Buffer.from(message[0 .. message.len / 2]),
-            Buffer.from(message[message.len / 2 ..]),
-        }), 0);
-        // 1. start at provided index
-        // 2. run test
-        // 3. see above
+            const message = "hello world";
+            var buf: [message.len + 1]u8 = undefined;
+            var msg = Socket.Message.fromBuffers(&[_]Buffer{
+                Buffer.from(buf[0 .. message.len / 2]),
+                Buffer.from(buf[message.len / 2 ..]),
+            });
+            _ = try tcpio.conn_ctrl.client.readMessage(&msg, 0);
+            try std.testing.expectEqualStrings(message, buf[0..message.len]);
+            std.debug.print("comparison successful\n", .{});
+
+            const ret_val = child_proc.wait();
+            try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
+            std.debug.print("server exited\n", .{});
+
+            for (test_fn_list) |test_fn, i|
+                std.debug.print("{d} {s}\n", .{ i, test_fn.name });
+        },
+        State.Worker => {
+            try tcpio.ctrl.client.connect(tcpio.addr_ctrl);
+            try tcpio.data.client.connect(tcpio.addr_data);
+
+            const message = "hello world";
+            _ = try tcpio.ctrl.client.writeMessage(Socket.Message.fromBuffers(&[_]Buffer{
+                Buffer.from(message[0 .. message.len / 2]),
+                Buffer.from(message[message.len / 2 ..]),
+            }), 0);
+            // 1. start at provided index
+            // 2. run test
+            // 3. see above
+        },
     } // state == State.Worker
 
     for (test_fn_list) |test_fn, i|
