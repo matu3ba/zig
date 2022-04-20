@@ -38,7 +38,7 @@
 //    |                  |      <--testout: testfnx_exit_status msglen-- |
 //    |                  |      <--stdout: panic_msg--                   |
 //    | (<--panic_msg--) |                                               |
-//    |                  |       --spawn at testfnx+1-->                 |
+//    |                  |      (--spawn at testfnx+1-->)                |
 //    |                  |                                               |
 // unclear: should we special case 1.panic_msg, 2. panic_msg+context ?
 
@@ -182,7 +182,6 @@ pub fn main() !void {
     std.debug.print("zig_exe_path: {s}\n", .{std.testing.zig_exe_path});
     std.debug.print("cwd: {s}\n", .{cwd});
 
-    // TODO path to current binary
     if (tcpio.state == State.Control) {
         const args = [_][]const u8{
             std.testing.test_runner_exe_path,
@@ -200,6 +199,27 @@ pub fn main() !void {
         defer tcpio.conn_ctrl.deinit();
         defer tcpio.conn_data.deinit();
         std.debug.print("connections succesful\n", .{});
+
+        // respawn child_process until we reach test_fn.len:
+        //   after wait():
+        //   if ret_val == 0
+        //     print OK of all messages
+        //   else
+        //     if messages in ctrl empty:
+        //       print unexpected panic during test: got no panic message(s)
+        //     else
+        //       if message == expected_message
+        //         print OK of current test_fn (other OKs were printed by child_process)
+        //         continue;
+        //       else
+        //         print fatal, got 'message', expected 'expected_message'
+        //
+        //
+        // panic message formatting:
+        // 1. panic message must be allocated
+        // 2. ctrl: test_fn_number exit_code msglen msg ?
+        // 3. alternative is to use data: msg
+
         const message = "hello world";
         var buf: [message.len + 1]u8 = undefined;
         var msg = Socket.Message.fromBuffers(&[_]Buffer{
@@ -214,11 +234,8 @@ pub fn main() !void {
         try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
         std.debug.print("server exited\n", .{});
 
-        // 1. spawn child_process with --worker
-        // 2. wait
-        // 3. read testout from child_process (pipe) [status data_size_in_bytes\nstatus..]
-        // 4. read stdout from child_process (pipe) [data(size_in_bytes),data(size_in_bytes)..]
-        // 5. check exit status/signal status of child (OOM/error on cleanup ressources)
+        for (test_fn_list) |test_fn, i|
+            std.debug.print("{d} {s}\n", .{ i, test_fn.name });
     } else {
         try tcpio.ctrl.client.connect(tcpio.addr_ctrl);
         try tcpio.data.client.connect(tcpio.addr_data);
@@ -228,14 +245,10 @@ pub fn main() !void {
             Buffer.from(message[0 .. message.len / 2]),
             Buffer.from(message[message.len / 2 ..]),
         }), 0);
-        // 1. start at given index
+        // 1. start at provided index
         // 2. run test
-        // 3. write exit status + data for test,
-        //    - write to stdout/testout pipe or allocation can fail => special signal
-        // x. on panic call custom panic handler to write header + panic message
+        // 3. see above
     } // state == State.Worker
-    // TODO: must exactly how many bytes were written to testout pipe
-    // for each test to read in the associated stdout pipe
 
     for (test_fn_list) |test_fn, i|
         std.debug.print("{d} {s}\n", .{ i, test_fn.name });
@@ -287,6 +300,7 @@ pub fn main() !void {
                 continue;
             },
         } else test_fn.func();
+
         if (result) |_| {
             ok_count += 1;
             test_node.end();
