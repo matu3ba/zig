@@ -66,7 +66,14 @@ var log_err_count: usize = 0;
 // with each using as worst case MAX_PATH_BYTES
 // TODO reserved size into libstd
 // TODO tcp code sizes (provide stubs for worst case string representation)
-var args_buffer: [3 * std.fs.MAX_PATH_BYTES + std.mem.page_size]u8 = undefined;
+
+// zig fmt: off
+const reserved_size = std.math.max(CtrlMsg.maxsize_testnr
+    + CtrlMsg.maxsize_exit + CtrlMsg.maxsize_len
+    + 3 * std.fs.MAX_PATH_BYTES, std.mem.page_size);
+// zig fmt: on
+
+var args_buffer: [reserved_size]u8 = undefined;
 var args_allocator = std.heap.FixedBufferAllocator.init(&args_buffer);
 
 const State = enum {
@@ -111,10 +118,15 @@ const TcpIo = struct {
             .conn_data = undefined,
         };
 
+        //set SO_REUSEADDR for the port to prevent .ADDRINUSE errors on fast invocations
+        //problem: Multiple instances could exist and listen to another messages
+        //solution: have a test_runner server running on localhost
         switch (state) {
             State.Control => {
                 tcpio.ctrl = .{ .listener = try tcp.Listener.init(.ip, .{ .close_on_exec = true }) };
                 tcpio.data = .{ .listener = try tcp.Listener.init(.ip, .{ .close_on_exec = true }) };
+                try tcpio.ctrl.listener.setReuseAddress(true);
+                try tcpio.data.listener.setReuseAddress(true);
                 try tcpio.ctrl.listener.bind(ip.Address.initIPv4(IPv4.unspecified, tcpio.port_ctrl));
                 try tcpio.data.listener.bind(ip.Address.initIPv4(IPv4.unspecified, tcpio.port_data));
                 try tcpio.ctrl.listener.listen(1);
@@ -184,6 +196,33 @@ fn processArgs() Cli {
     return cli;
 }
 
+fn maxAsciiDigits(comptime UT: type) u64 {
+    return std.fmt.count("{d}", .{std.math.maxInt(UT)});
+}
+
+// count(comptime fmt: []const u8, args: anytype) {c} ascii string
+//pub fn count(comptime fmt: []const u8, args: anytype) u64 {
+const CtrlMsg = struct {
+    const Self = @This();
+    testnr: u32,
+    exit: u8, // exit_status
+    len: u32,
+    const maxsize_testnr: u64 = maxAsciiDigits(std.meta.fieldInfo(CtrlMsg, .testnr).field_type);
+    const maxsize_exit: u64 = maxAsciiDigits(Self.exit);
+    const maxsize_len: u64 = maxAsciiDigits(Self.len);
+    // writes into padded msgbuf
+    //fn print(self: *CtrlMsg, msgbuf: []u8) !void {
+    //    // TODO write into buffer
+    //    _ = ctrlmsg;
+    //    _ = msgbuf;
+    //}
+    // reads from padded msgbuf
+    //fn parse(self: *CtrlMsg, msgbuf: []u8) !void {
+    //    _ = ctrlmsg;
+    //    _ = msgbuf;
+    //}
+};
+
 // args: path_to_testbinary, path_to_zigbinary, [--worker, --start-index 0]
 pub fn main() !void {
     if (!have_ifnamesize) return error.FAILURE;
@@ -211,69 +250,70 @@ pub fn main() !void {
 
     switch (tcpio.state) {
         State.Control => {
-            while (cli.start_index < test_fn_list.len) : (cli.start_index += 1) {
-                //TODO parse executed test into cur_index
+            while (cli.start_index < test_fn_list.len) {
+                const s_start_index = std.fmt.bufPrint(buf_start_index[0..], "{d}", .{cli.start_index}) catch unreachable;
+                const args = [_][]const u8{
+                    std.testing.test_runner_exe_path,
+                    std.testing.zig_exe_path,
+                    "--worker",
+                    "--start-index",
+                    s_start_index,
+                };
+                var child_proc = try ChildProcess.init(&args, std.testing.allocator);
+                defer child_proc.deinit();
+                try child_proc.spawn();
+                std.debug.print("child_proc spawned:\n", .{});
+                std.debug.print("args {s}\n", .{args});
+
+                tcpio.conn_ctrl = try tcpio.ctrl.listener.accept(.{ .close_on_exec = true }); // blocking
+                tcpio.conn_data = try tcpio.data.listener.accept(.{ .close_on_exec = true }); // blocking
+                defer tcpio.conn_ctrl.deinit();
+                defer tcpio.conn_data.deinit();
+                std.debug.print("connections succesful\n", .{});
+
+                //CtrlMsg
+
+                //const msg = parseMessage(ctrl, );
+                // TODO reading + parsing messages from socket
+
+                //const message = "hello world";
+                //var buf: [message.len + 1]u8 = undefined;
+                //var msg = Socket.Message.fromBuffers(&[_]Buffer{
+                //    Buffer.from(buf[0 .. message.len / 2]),
+                //    Buffer.from(buf[message.len / 2 ..]),
+                //});
+                //_ = try tcpio.conn_ctrl.client.readMessage(&msg, 0);
+                //try std.testing.expectEqualStrings(message, buf[0..message.len]);
+                //std.debug.print("comparison successful\n", .{});
+
+                //const ret_val = child_proc.wait();
+                //try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
+                //std.debug.print("server exited\n", .{});
+
+                // respawn child_process until we reach test_fn.len:
+                //   after wait():
+                //   if ret_val == 0
+                //     print OK of all messages
+                //   else
+                //     if messages in ctrl empty:
+                //       print unexpected panic during test: got no panic message(s)
+                //     else
+                //       if message == expected_message
+                //         print OK of current test_fn (other OKs were printed by child_process)
+                //         continue;
+                //       else
+                //         print fatal, got 'message', expected 'expected_message'
+                //
+                //
+                // panic message formatting:
+                // 1. panic message must be allocated
+                // 2. ctrl: test_fn_number exit_code msglen msg ?
+                // 3. alternative is to use data: msg
+
+                //parse executed test into cur_index
                 //update cli.start_index by checking, if start_index + 1 == cur_index
+                cli.start_index += 1; // update
             }
-
-            const s_start_index = std.fmt.bufPrint(buf_start_index[0..], "{d}", .{cli.start_index}) catch unreachable;
-            std.debug.print("s_start_index.len: {d}\n", .{s_start_index.len});
-
-            const args = [_][]const u8{
-                std.testing.test_runner_exe_path,
-                std.testing.zig_exe_path,
-                "--worker",
-                "--start-index",
-                s_start_index,
-            };
-            var child_proc = try ChildProcess.init(&args, std.testing.allocator);
-            defer child_proc.deinit();
-            try child_proc.spawn();
-            std.debug.print("child_proc spawned:\n", .{});
-            std.debug.print("args {s}\n", .{args});
-
-            tcpio.conn_ctrl = try tcpio.ctrl.listener.accept(.{ .close_on_exec = true }); // accept is blocking
-            tcpio.conn_data = try tcpio.data.listener.accept(.{ .close_on_exec = true }); // accept is blocking
-            defer tcpio.conn_ctrl.deinit();
-            defer tcpio.conn_data.deinit();
-            std.debug.print("connections succesful\n", .{});
-
-            // respawn child_process until we reach test_fn.len:
-            //   after wait():
-            //   if ret_val == 0
-            //     print OK of all messages
-            //   else
-            //     if messages in ctrl empty:
-            //       print unexpected panic during test: got no panic message(s)
-            //     else
-            //       if message == expected_message
-            //         print OK of current test_fn (other OKs were printed by child_process)
-            //         continue;
-            //       else
-            //         print fatal, got 'message', expected 'expected_message'
-            //
-            //
-            // panic message formatting:
-            // 1. panic message must be allocated
-            // 2. ctrl: test_fn_number exit_code msglen msg ?
-            // 3. alternative is to use data: msg
-
-            const message = "hello world";
-            var buf: [message.len + 1]u8 = undefined;
-            var msg = Socket.Message.fromBuffers(&[_]Buffer{
-                Buffer.from(buf[0 .. message.len / 2]),
-                Buffer.from(buf[message.len / 2 ..]),
-            });
-            _ = try tcpio.conn_ctrl.client.readMessage(&msg, 0);
-            try std.testing.expectEqualStrings(message, buf[0..message.len]);
-            std.debug.print("comparison successful\n", .{});
-
-            const ret_val = child_proc.wait();
-            try std.testing.expectEqual(ret_val, .{ .Exited = 0 });
-            std.debug.print("server exited\n", .{});
-
-            for (test_fn_list) |test_fn, i|
-                std.debug.print("{d} {s}\n", .{ i, test_fn.name });
         },
         State.Worker => {
             try tcpio.ctrl.client.connect(tcpio.addr_ctrl);
@@ -284,11 +324,26 @@ pub fn main() !void {
                 Buffer.from(message[0 .. message.len / 2]),
                 Buffer.from(message[message.len / 2 ..]),
             }), 0);
-            // 1. start at provided index
-            // 2. run test
-            // 3. see above
+
+            var index = cli.start_index;
+            while (index < test_fn_list.len) : (index += 1) {
+                std.debug.print("{d} {s}\n", .{ index, test_fn_list[index].name });
+
+                const result = test_fn_list[index].func();
+                if (result) |_| {
+                    std.debug.print("OK\n", .{});
+                    // TODO write to socket
+                } else |err| switch (err) {
+                    error.SkipZigTest => {
+                        std.debug.print("SKIP\n", .{});
+                    },
+                    else => {
+                        std.debug.print("FAIL\n", .{});
+                    },
+                }
+            }
         },
-    } // state == State.Worker
+    }
 
     for (test_fn_list) |test_fn, i|
         std.debug.print("{d} {s}\n", .{ i, test_fn.name });
