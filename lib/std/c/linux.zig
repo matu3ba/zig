@@ -365,3 +365,87 @@ pub const dirent64 = struct {
     d_type: u8,
     d_name: [256]u8,
 };
+
+// TODO figure out how to translate empty struct
+// https://stackoverflow.com/questions/24685399/c-empty-struct-what-does-this-mean-do
+// struct sched_param;
+// lib/libc/include/generic-musl/spawn.h
+
+pub const POSIX_SPAWN_RESETIDS = 0x0001;
+pub const POSIX_SPAWN_SETPGROUP = 0x0002;
+pub const POSIX_SPAWN_SETSIGDEF = 0x0004;
+pub const POSIX_SPAWN_SETSIGMASK = 0x0008;
+// The following ones are platform specific and glibc allows platforms to
+// overwrite these, so define them per OS
+pub const POSIX_SPAWN_SETSCHEDPARAM = 0x0010;
+pub const POSIX_SPAWN_SETSCHEDULER = 0x0020;
+pub const POSIX_SPAWN_USEVFORK = 0x0040;
+pub const POSIX_SPAWN_SETSID = 0x0080;
+
+pub const posix_spawnattr_t = *opaque {};
+pub const posix_spawn_file_actions_t = *opaque {};
+pub extern "c" fn posix_spawnattr_init(attr: *posix_spawnattr_t) c_int;
+pub extern "c" fn posix_spawnattr_destroy(attr: *posix_spawnattr_t) void;
+pub extern "c" fn posix_spawnattr_setflags(attr: *posix_spawnattr_t, flags: c_short) c_int;
+pub extern "c" fn posix_spawnattr_getflags(noalias attr: *const posix_spawnattr_t, noalias flags: *c_short) c_int;
+
+pub extern "c" fn posix_spawnattr_setpgroup(attr: *posix_spawnattr_t, pid: pid_t) c_int;
+pub extern "c" fn posix_spawnattr_getpgroup(noalias attr: *const posix_spawnattr_t, noalias pid: *pid_t) c_int;
+pub extern "c" fn posix_spawnattr_setsigmask(noalias attr: *posix_spawnattr_t, noalias sigmask: *const sigset_t) c_int;
+pub extern "c" fn posix_spawnattr_getsigmask(noalias attr: *const posix_spawnattr_t, noalias sigmask: *sigset_t) c_int;
+//int posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t);
+//int posix_spawnattr_getpgroup(const posix_spawnattr_t *__restrict, pid_t *__restrict);
+//int posix_spawnattr_setsigmask(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
+//int posix_spawnattr_getsigmask(const posix_spawnattr_t *__restrict, sigset_t *__restrict);
+
+pub extern "c" fn posix_spawnattr_setsigdefault(noalias attr: *posix_spawnattr_t, noalias sigmask: *const sigset_t) c_int;
+pub extern "c" fn posix_spawnattr_getsigdefault(noalias attr: *const posix_spawnattr_t, noalias sigmask: *sigset_t) c_int;
+//int posix_spawnattr_setsigdefault(posix_spawnattr_t *__restrict, const sigset_t *__restrict);
+//int posix_spawnattr_getsigdefault(const posix_spawnattr_t *__restrict, sigset_t *__restrict);
+
+//pub extern "c" fn posix_spawnattr_setschedparam(noalias attr: *posix_spawnattr_t, noalias sigmask: const *sigset_t) c_int;
+//pub extern "c" fn posix_spawnattr_getschedparam(noalias attr: *const posix_spawnattr_t, noalias sigmask: *sigset_t) c_int;
+pub extern "c" fn posix_spawnattr_setschedpolicy(attr: *posix_spawnattr_t, policy: c_int) c_int;
+pub extern "c" fn posix_spawnattr_getschedpolicy(noalias attr: *const posix_spawnattr_t, noalias policy: *c_int) c_int;
+//int posix_spawnattr_setschedparam(posix_spawnattr_t *__restrict, const struct sched_param *__restrict);
+//int posix_spawnattr_getschedparam(const posix_spawnattr_t *__restrict, struct sched_param *__restrict);
+//int posix_spawnattr_setschedpolicy(posix_spawnattr_t *, int);
+//int posix_spawnattr_getschedpolicy(const posix_spawnattr_t *__restrict, int *__restrict);
+
+pub extern "c" fn posix_spawn_file_actions_init(actions: *posix_spawn_file_actions_t) c_int;
+pub extern "c" fn posix_spawn_file_actions_destroy(actions: *posix_spawn_file_actions_t) c_int;
+pub extern "c" fn posix_spawn_file_actions_addclose(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
+pub extern "c" fn posix_spawn_file_actions_addopen(
+    noalias actions: *posix_spawn_file_actions_t,
+    filedes: fd_t,
+    noalias path: [*:0]const u8,
+    oflag: c_int,
+    mode: mode_t,
+) c_int;
+pub extern "c" fn posix_spawn_file_actions_adddup2(
+    actions: *posix_spawn_file_actions_t,
+    filedes: fd_t,
+    newfiledes: fd_t,
+) c_int;
+pub extern "c" fn posix_spawn(
+    noalias pid: *pid_t,
+    noalias path: [*:0]const u8,
+    actions: ?*const posix_spawn_file_actions_t,
+    noalias attr: ?*const posix_spawnattr_t,
+    noalias argv: [*:null]?[*:0]const u8,
+    noalias env: [*:null]?[*:0]const u8,
+) c_int;
+pub extern "c" fn posix_spawnp(
+    noalias pid: *pid_t,
+    noalias path: [*:0]const u8,
+    actions: ?*const posix_spawn_file_actions_t,
+    noalias attr: ?*const posix_spawnattr_t,
+    noalias argv: [*:null]?[*:0]const u8,
+    noalias env: [*:null]?[*:0]const u8,
+) c_int;
+
+// TODO check, what both flags mean
+//#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
+//pub extern "c" fn posix_spawn_file_actions_addchdir_np(actions: *posix_spawn_file_actions_t, path: [*:0]const u8) c_int;
+//pub extern "c" fn posix_spawn_file_actions_addfchdir_np(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
+// TODO glibc has also posix_spawn_file_actions_addclosefrom_np, but musl not

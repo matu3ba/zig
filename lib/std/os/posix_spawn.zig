@@ -32,7 +32,9 @@ pub const Error = error{
     ChildExecFailed,
 } || UnexpectedError;
 
-const posix_spawn = if (builtin.target.isDarwin()) struct {
+// TODO fix the target
+//const posix_spawn = if (builtin.target.isDarwin()) struct {
+const posix_spawn = struct {
     pub const Attr = struct {
         attr: system.posix_spawnattr_t,
 
@@ -287,4 +289,5 @@ const posix_spawn = if (builtin.target.isDarwin()) struct {
             }
         }
     }
-} else struct {};
+    //} else struct {};
+};
