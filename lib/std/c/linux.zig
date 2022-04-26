@@ -413,7 +413,7 @@ pub extern "c" fn posix_spawnattr_getschedpolicy(noalias attr: *const posix_spaw
 //int posix_spawnattr_getschedpolicy(const posix_spawnattr_t *__restrict, int *__restrict);
 
 pub extern "c" fn posix_spawn_file_actions_init(actions: *posix_spawn_file_actions_t) c_int;
-pub extern "c" fn posix_spawn_file_actions_destroy(actions: *posix_spawn_file_actions_t) c_int;
+pub extern "c" fn posix_spawn_file_actions_destroy(actions: *posix_spawn_file_actions_t) void;
 pub extern "c" fn posix_spawn_file_actions_addclose(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
 pub extern "c" fn posix_spawn_file_actions_addopen(
     noalias actions: *posix_spawn_file_actions_t,
@@ -444,8 +444,7 @@ pub extern "c" fn posix_spawnp(
     noalias env: [*:null]?[*:0]const u8,
 ) c_int;
 
-// TODO check, what both flags mean
-//#if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
-//pub extern "c" fn posix_spawn_file_actions_addchdir_np(actions: *posix_spawn_file_actions_t, path: [*:0]const u8) c_int;
-//pub extern "c" fn posix_spawn_file_actions_addfchdir_np(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
+// TODO check, why both flags exist: #if defined(_BSD_SOURCE) || defined(_GNU_SOURCE)
+pub extern "c" fn posix_spawn_file_actions_addchdir_np(actions: *posix_spawn_file_actions_t, path: [*:0]const u8) c_int;
+pub extern "c" fn posix_spawn_file_actions_addfchdir_np(actions: *posix_spawn_file_actions_t, filedes: fd_t) c_int;
 // TODO glibc has also posix_spawn_file_actions_addclosefrom_np, but musl not

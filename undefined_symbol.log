@@ -1,0 +1,116 @@
+compiling on linking c on glibc system with
+./build/zig test -lc lib/std/child_process.zig
+gives me:
+ripgrep shows results and abilist in lib/libc/glibc/abilist also shows a symbol
+posix_spawn_file_actions_addfchdir_np
+How do I debug lld to see what is failing exactly?
+Or is there any other trick?
+
+ld.lld: error: undefined symbol: posix_spawn_file_actions_addfchdir_np
+>>> referenced by posix_spawn.zig:158 (/home/misterspoon/dev/git/zig/zig/dev/lib/std/os/posix_spawn.zig:158)
+>>>               lib/std/zig-cache/o/548f5213156cd7f849c6e92fb3b349d1/test.o:(std.os.posix_spawn.posix_spawn.Actions.fchdir)
+
+ld.lld: error: undefined symbol: posix_spawn_file_actions_addchdir_np
+>>> referenced by posix_spawn.zig:147 (/home/misterspoon/dev/git/zig/zig/dev/lib/std/os/posix_spawn.zig:147)
+>>>               lib/std/zig-cache/o/548f5213156cd7f849c6e92fb3b349d1/test.o:(std.os.posix_spawn.posix_spawn.Actions.chdirZ)
+thread 585597 panic: attempt to unwrap error: LLDReportedFailure
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/fs.zig:1285:9: 0x55d418039bd6 in std.fs.Dir.makeDir (zig1)
+        try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/src/link/Elf.zig:1777:29: 0x55d41816eb6f in link.Elf.linkWithLLD (zig1)
+            } else {
+                            ^
+/home/misterspoon/dev/git/zig/zig/dev/src/link/Elf.zig:936:9: 0x55d41815c534 in link.Elf.flush (zig1)
+    if (self.base.options.emit == null) {
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/src/link.zig:601:21: 0x55d4181597d4 in link.File.flush (zig1)
+            .coff => return @fieldParentPtr(Coff, "base", base).flush(comp, prog_node),
+                    ^
+/home/misterspoon/dev/git/zig/zig/dev/src/Compilation.zig:2192:5: 0x55d41811f61f in Compilation.flush (zig1)
+                file.unloadTree(comp.gpa);
+    ^
+/home/misterspoon/dev/git/zig/zig/dev/src/Compilation.zig:2174:9: 0x55d418115731 in Compilation.update (zig1)
+        // Failure here only means an unnecessary cache miss.
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/src/main.zig:3101:5: 0x55d4180a48cd in main.updateModule (zig1)
+        const log_text = comp.getCompileLogOutput();
+    ^
+/home/misterspoon/dev/git/zig/zig/dev/src/main.zig:2790:21: 0x55d417fc4bb6 in main.buildOutputType (zig1)
+    const run_or_test = switch (arg_mode) {
+                    ^
+/home/misterspoon/dev/git/zig/zig/dev/src/main.zig:216:9: 0x55d417f8ccd2 in main.mainArgs (zig1)
+    const cmd = args[1];
+        ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2759:19: 0x55d418039e10 in std.os.mkdiratZ (zig1)
+/// `mode` is ignored on Windows and WASI.
+                  ^
+/home/misterspoon/dev/git/zig/zig/dev/lib/std/os.zig:2719:9: 0x55d418039cc6 in std.os.mkdirat (zig1)
+    }
+        ^
+???:?:?: 0x55d417f8e3db in ??? (/home/misterspoon/dev/git/zig/zig/dev/src/stage1/analyze.cpp)
+/home/misterspoon/dev/git/zig/zig/dev/src/stage1.zig:48:43: 0x55d417f8c568 in main (zig1)
+        stage2.mainArgs(gpa, arena, args) catch unreachable;
+                                          ^

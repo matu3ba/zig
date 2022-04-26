@@ -18,6 +18,9 @@ const TailQueue = std.TailQueue;
 const maxInt = std.math.maxInt;
 const assert = std.debug.assert;
 
+// TODO remove before upstreaming
+const clinux = std.c;
+
 pub const ChildProcess = struct {
     pid: if (builtin.os.tag == .windows) void else i32,
     handle: if (builtin.os.tag == .windows) windows.HANDLE else void,
@@ -665,19 +668,13 @@ pub const ChildProcess = struct {
     fn spawnPosix(self: *ChildProcess) SpawnError!void {
         const pipe_flags = if (io.is_async) os.O.NONBLOCK else 0;
         const stdin_pipe = if (self.stdin_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
-        errdefer if (self.stdin_behavior == StdIo.Pipe) {
-            destroyPipe(stdin_pipe);
-        };
+        errdefer if (self.stdin_behavior == StdIo.Pipe) destroyPipe(stdin_pipe);
 
         const stdout_pipe = if (self.stdout_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
-        errdefer if (self.stdout_behavior == StdIo.Pipe) {
-            destroyPipe(stdout_pipe);
-        };
+        errdefer if (self.stdout_behavior == StdIo.Pipe) destroyPipe(stdout_pipe);
 
         const stderr_pipe = if (self.stderr_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
-        errdefer if (self.stderr_behavior == StdIo.Pipe) {
-            destroyPipe(stderr_pipe);
-        };
+        errdefer if (self.stderr_behavior == StdIo.Pipe) destroyPipe(stderr_pipe);
 
         const any_ignore = (self.stdin_behavior == StdIo.Ignore or self.stdout_behavior == StdIo.Ignore or self.stderr_behavior == StdIo.Ignore);
         const dev_null_fd = if (any_ignore)
@@ -694,9 +691,31 @@ pub const ChildProcess = struct {
             }
         else
             undefined;
-        defer {
-            if (any_ignore) os.close(dev_null_fd);
+        defer if (any_ignore) os.close(dev_null_fd);
+
+        // ------ TEST START
+
+        var attr = try os.posix_spawn.Attr.init();
+        defer attr.deinit();
+        // TODO fix other bits for unixes
+        // should we unify the common bits?
+        var flags: u16 = clinux.POSIX_SPAWN_SETSIGDEF | clinux.POSIX_SPAWN_SETSIGMASK;
+        try attr.set(flags);
+
+        var actions = try os.posix_spawn.Actions.init();
+        defer actions.deinit();
+
+        try setUpChildIoPosixSpawn(self.stdin_behavior, &actions, stdin_pipe, os.STDIN_FILENO, dev_null_fd);
+        try setUpChildIoPosixSpawn(self.stdout_behavior, &actions, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
+        try setUpChildIoPosixSpawn(self.stderr_behavior, &actions, stderr_pipe, os.STDERR_FILENO, dev_null_fd);
+
+        if (self.cwd_dir) |cwd| {
+            try actions.fchdir(cwd.fd);
+        } else if (self.cwd) |cwd| {
+            try actions.chdir(cwd);
         }
+
+        // ------ TEST END
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_allocator.deinit();
@@ -732,61 +751,62 @@ pub const ChildProcess = struct {
 
         // This pipe is used to communicate errors between the time of fork
         // and execve from the child process to the parent process.
-        const err_pipe = blk: {
-            if (builtin.os.tag == .linux) {
-                const fd = try os.eventfd(0, linux.EFD.CLOEXEC);
-                // There's no distinction between the readable and the writeable
-                // end with eventfd
-                break :blk [2]os.fd_t{ fd, fd };
-            } else {
-                break :blk try os.pipe2(os.O.CLOEXEC);
-            }
-        };
-        errdefer destroyPipe(err_pipe);
+        //const err_pipe = blk: {
+        //    if (builtin.os.tag == .linux) {
+        //        const fd = try os.eventfd(0, linux.EFD.CLOEXEC);
+        //        // There's no distinction between the readable and the writeable
+        //        // end with eventfd
+        //        break :blk [2]os.fd_t{ fd, fd };
+        //    } else {
+        //        break :blk try os.pipe2(os.O.CLOEXEC);
+        //    }
+        //};
+        //errdefer destroyPipe(err_pipe);
 
-        const pid_result = try os.fork();
-        if (pid_result == 0) {
-            // we are the child
-            setUpChildIo(self.stdin_behavior, stdin_pipe[0], os.STDIN_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
-            setUpChildIo(self.stdout_behavior, stdout_pipe[1], os.STDOUT_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
-            setUpChildIo(self.stderr_behavior, stderr_pipe[1], os.STDERR_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
+        //const pid_result = try os.fork();
+        //if (pid_result == 0) {
+        //    // we are the child
+        //    setUpChildIo(self.stdin_behavior, stdin_pipe[0], os.STDIN_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    setUpChildIo(self.stdout_behavior, stdout_pipe[1], os.STDOUT_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    setUpChildIo(self.stderr_behavior, stderr_pipe[1], os.STDERR_FILENO, dev_null_fd) catch |err| forkChildErrReport(err_pipe[1], err);
 
-            if (self.stdin_behavior == .Pipe) {
-                os.close(stdin_pipe[0]);
-                os.close(stdin_pipe[1]);
-            }
-            if (self.stdout_behavior == .Pipe) {
-                os.close(stdout_pipe[0]);
-                os.close(stdout_pipe[1]);
-            }
-            if (self.stderr_behavior == .Pipe) {
-                os.close(stderr_pipe[0]);
-                os.close(stderr_pipe[1]);
-            }
+        //    if (self.stdin_behavior == .Pipe) {
+        //        os.close(stdin_pipe[0]);
+        //        os.close(stdin_pipe[1]);
+        //    }
+        //    if (self.stdout_behavior == .Pipe) {
+        //        os.close(stdout_pipe[0]);
+        //        os.close(stdout_pipe[1]);
+        //    }
+        //    if (self.stderr_behavior == .Pipe) {
+        //        os.close(stderr_pipe[0]);
+        //        os.close(stderr_pipe[1]);
+        //    }
 
-            if (self.cwd_dir) |cwd| {
-                os.fchdir(cwd.fd) catch |err| forkChildErrReport(err_pipe[1], err);
-            } else if (self.cwd) |cwd| {
-                os.chdir(cwd) catch |err| forkChildErrReport(err_pipe[1], err);
-            }
+        //    if (self.cwd_dir) |cwd| {
+        //        os.fchdir(cwd.fd) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    } else if (self.cwd) |cwd| {
+        //        os.chdir(cwd) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    }
 
-            if (self.gid) |gid| {
-                os.setregid(gid, gid) catch |err| forkChildErrReport(err_pipe[1], err);
-            }
+        //    if (self.gid) |gid| {
+        //        os.setregid(gid, gid) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    }
 
-            if (self.uid) |uid| {
-                os.setreuid(uid, uid) catch |err| forkChildErrReport(err_pipe[1], err);
-            }
+        //    if (self.uid) |uid| {
+        //        os.setreuid(uid, uid) catch |err| forkChildErrReport(err_pipe[1], err);
+        //    }
 
-            const err = switch (self.expand_arg0) {
-                .expand => os.execvpeZ_expandArg0(.expand, argv_buf.ptr[0].?, argv_buf.ptr, envp),
-                .no_expand => os.execvpeZ_expandArg0(.no_expand, argv_buf.ptr[0].?, argv_buf.ptr, envp),
-            };
-            forkChildErrReport(err_pipe[1], err);
-        }
+        //    const err = switch (self.expand_arg0) {
+        //        .expand => os.execvpeZ_expandArg0(.expand, argv_buf.ptr[0].?, argv_buf.ptr, envp),
+        //        .no_expand => os.execvpeZ_expandArg0(.no_expand, argv_buf.ptr[0].?, argv_buf.ptr, envp),
+        //    };
+        //    forkChildErrReport(err_pipe[1], err);
+        //}
 
-        // we are the parent
-        const pid = @intCast(i32, pid_result);
+        const pid = try os.posix_spawn.spawnp(self.argv[0], actions, attr, argv_buf, envp);
+        //// we are the parent
+        //const pid = @intCast(i32, pid_result);
         if (self.stdin_behavior == StdIo.Pipe) {
             self.stdin = File{ .handle = stdin_pipe[1] };
         } else {
@@ -804,7 +824,7 @@ pub const ChildProcess = struct {
         }
 
         self.pid = pid;
-        self.err_pipe = err_pipe;
+        //self.err_pipe = err_pipe;
         self.term = null;
 
         if (self.stdin_behavior == StdIo.Pipe) {
