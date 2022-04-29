@@ -1,15 +1,15 @@
 //!zig_spawn is posix_spawn minus the complex thread-local signal handling from posix threads
 //!Note, that thread signaling and cancelation methods are not used.
 //!zig_spawn is not multithreading-safe.
-
 // TODO phrasing
-// based on musl implementation of posix_spawn
 
 //reasons:
 //Support in musl and glibc is still incomplete.
 //posix_spawn has several 1-line thread-unsafe set()/get() methods.
 //pthreads has many thread-safe set()/get() methods, even though synchronization
 //may be unnecessary.
+
+// based on musl implementation of posix_spawn
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -85,12 +85,12 @@ pub const SpawnConfig = struct {
 
 const zig_spawn = struct {
     //typedef struct {
-    //	int __flags;
-    //	pid_t __pgrp;
-    //	sigset_t __def, __mask;
-    //	int __prio, __pol;
-    //	void *__fn;
-    //	char __pad[64-sizeof(void *)];
+    // int __flags;
+    // pid_t __pgrp;
+    // sigset_t __def, __mask;
+    // int __prio, __pol;
+    // void *__fn;
+    // char __pad[64-sizeof(void *)];
     //} posix_spawnattr_t;
     pub const Attr = struct {
         flags: u32, // musl uses int, darinw uses c_short
@@ -238,6 +238,15 @@ const zig_spawn = struct {
         //}
     };
 
+    const Args = struct {
+        p: [2]c_int,
+        oldmask: os.sigset_t,
+        path: []const u8,
+        fa: *const Actions,
+        attr: *Attr,
+        argv: [*:null]?[*:0]const u8,
+        envp: [*:null]?[*:0]const u8,
+    };
 
     pub fn spawn(
         path: []const u8,
@@ -258,44 +267,64 @@ const zig_spawn = struct {
         envp: [*:null]?[*:0]const u8,
     ) Error!pid_t {
         var pid: pid_t = undefined;
-        var stack: [1024+os.PATH_MAX]u8 = undefined;
-        _ = stack;
-        _ = pid;
+        var stack: [1024 + os.PATH_MAX]u8 = undefined;
 
-        // TODO guard page etc to prevent stack smashing
         // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
-        //pthread_sigmask(SIG_BLOCK, SIGALL_SET, &args.oldmask);
-        //TODO args assignment after looking into clone implementation in Zig
+        var args = Args{
+            .p = undefined,
+            .path = path,
+            .fa = actions,
+            .attr = attr,
+            .argv = argv,
+            .envp = envp,
+        };
+        // guard page etc to prevent stack smashing?
+        // pthread_sigmask(SIG_BLOCK, SIGALL_SET, &args.oldmask);
         //LOCK(__abort_lock);
 
-        //int clone(int (*func)(void *), void *stack, int flags, void *arg, ...)
-        //{
-        //	va_list ap;
-        //	pid_t *ptid, *ctid;
-        //	void  *tls;
-        //
-        //	va_start(ap, arg);
-        //	ptid = va_arg(ap, pid_t *);
-        //	tls  = va_arg(ap, void *);
-        //	ctid = va_arg(ap, pid_t *);
-        //	va_end(ap);
-        //
-        //	return __syscall_ret(__clone(func, stack, flags, arg, ptid, tls, ctid));
+        //if (pipe2(args.p, O_CLOEXEC)) {
+        //	UNLOCK(__abort_lock);
+        //	ec = errno;
+        //	goto fail;
         //}
 
-	//pid = __clone(child, stack+sizeof stack,
-	//	CLONE_VM|CLONE_VFORK|SIGCHLD, &args);
-	//close(args.p[1]);
         const flags: u32 = system.CLONE.VM | system.CLONE.VFORK | system.SIG.CHLD;
-        _ = flags;
+        // Linux for now
+        pid = system.clone(child(), @ptrToInt(stack.ptr) + @sizeOf(stack), flags, &args);
+        // close(args.p[1]);
+        // UNLOCK(__abort_lock);
+
+        if (pid > 0) {
+            waitpid(pid, 0);
+        } else {
+            @panic("could not start childprocess\n");
+        }
+
+        //if (pid > 0) {
+        //      if (read(args.p[0], &ec, sizeof ec) != sizeof ec) ec = 0;
+        //      else waitpid(pid, &(int){0}, 0);
+        //} else {
+        //      ec = -pid;
+        //}
+
+        //close(args.p[0]);
+        //if (!ec && res) *res = pid; // error code and res == 0
+
+        //fail:
+        //pthread_sigmask(SIG_SETMASK, &args.oldmask, 0);
+        //pthread_setcancelstate(cs, 0);
+        //
+        //return ec; or 0
 
         // TODO figure out why arguments are different
         //switch (system.getErrno(system.clone(
         //    child(),
-        //    stack,
         //    @ptrToInt(&mapped[stack_offset]),
         //    flags,
-        //    &args,
+        //instead of &args, used are:
+        //    &instance.thread.parent_tid,
+        //    tls_ptr,
+        //    &instance.thread.child_tid.value,
         //))) {
         //    .SUCCESS => return Impl{ .thread = &instance.thread },
         //    .AGAIN => return error.ThreadQuotaExceeded,
@@ -334,9 +363,7 @@ const zig_spawn = struct {
         //}
     }
 
-    fn child() void {
-
-    }
+    fn child() void {}
 
     //pub fn spawnp(
     //    file: []const u8,
