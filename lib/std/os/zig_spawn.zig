@@ -93,7 +93,7 @@ pub const SpawnConfig = struct {
 };
 
 pub const zig_spawn = struct {
-    pub const SIGALL = 0xffffffff_ffffffff;
+    pub const SIGALL = 0xffffffff_ffffffff; // hack
     //typedef struct {
     // int __flags;
     // pid_t __pgrp;
@@ -315,6 +315,9 @@ pub const zig_spawn = struct {
         };
         // guard page etc to prevent stack smashing?
         // pthread_sigmask(SIG_BLOCK, SIGALL_SET, &args.oldmask);
+        sigmask(system.SIG.BLOCK, zig_spawn.SIGALL, &args.oldmask);
+        // lock guards aggainst SIABRT disposition change by abort and leaking
+        // pipe fd to fork-without-exec
         //LOCK(__abort_lock);
 
         //if (pipe2(args.p, O_CLOEXEC)) {
@@ -345,9 +348,8 @@ pub const zig_spawn = struct {
         //close(args.p[0]);
         //if (!ec && res) *res = pid; // error code and res == 0
 
-        sigmask(system.SIG.BLOCK, SIGALL, &args.oldmask);
-        //pthread_sigmask(SIG_SETMASK, &args.oldmask, 0);
-        //pthread_setcancelstate(cs, 0);
+        sigmask(system.SIG.SETMASK, &args.oldmask, 0);
+        //pthread_setcancelstate(cs, 0); // dont touch TLS offsets with signaling for now
         //
         //return ec; or 0
 
