@@ -14,34 +14,40 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const child_process = std.child_process;
 const os = std.os;
 const system = os.system;
-const errno = system.getErrno;
-const fd_t = system.fd_t;
-const mode_t = system.mode_t;
-const pid_t = system.pid_t;
 const unexpectedErrno = os.unexpectedErrno;
 const UnexpectedError = os.UnexpectedError;
 const toPosixPath = os.toPosixPath;
 const WaitPidResult = os.WaitPidResult;
+const errno = system.getErrno;
+const fd_t = system.fd_t;
+const mode_t = system.mode_t;
+const pid_t = system.pid_t;
 
-pub usingnamespace zig_spawn;
+//pub usingnamespace zig_spawn;
+
+//pub const Error = error{
+//    SystemResources,
+//    InvalidFileDescriptor,
+//    NameTooLong,
+//    TooBig,
+//    PermissionDenied,
+//    InputOutput,
+//    FileSystem,
+//    FileNotFound,
+//    InvalidExe,
+//    NotDir,
+//    FileBusy,
+//
+//    /// Returned when the child fails to execute either in the pre-exec() initialization step, or
+//    /// when exec(3) is invoked.
+//    ChildExecFailed,
+//} || UnexpectedError;
 
 pub const Error = error{
-    SystemResources,
-    InvalidFileDescriptor,
-    NameTooLong,
-    TooBig,
-    PermissionDenied,
-    InputOutput,
-    FileSystem,
-    FileNotFound,
-    InvalidExe,
-    NotDir,
-    FileBusy,
-
-    /// Returned when the child fails to execute either in the pre-exec() initialization step, or
-    /// when exec(3) is invoked.
+    InvalidSignalMask,
     ChildExecFailed,
 } || UnexpectedError;
 
@@ -63,6 +69,9 @@ pub const FDOP_OPEN = 3;
 pub const FDOP_CHDIR = 4;
 pub const FDOP_FCHDIR = 5;
 
+// set all signals, musl uses
+//#define SIGALL_SET ((sigset_t *)(const unsigned long long [2]){ -1,-1 })
+
 const Fdop = struct {
     next: ?*Fdop,
     prev: ?*Fdop,
@@ -83,7 +92,8 @@ pub const SpawnConfig = struct {
     stack_size: usize = 16 * 1024 * 1024,
 };
 
-const zig_spawn = struct {
+pub const zig_spawn = struct {
+    pub const SIGALL = 0xffffffff_ffffffff;
     //typedef struct {
     // int __flags;
     // pid_t __pgrp;
@@ -92,7 +102,7 @@ const zig_spawn = struct {
     // void *__fn;
     // char __pad[64-sizeof(void *)];
     //} posix_spawnattr_t;
-    pub const Attr = struct {
+    pub const Attr = extern struct {
         flags: u32, // musl uses int, darinw uses c_short
         pgrp: pid_t,
         // sigset_t is 128 bytes on 64 bit Linux, Linux reserves 1024 bit
@@ -102,17 +112,20 @@ const zig_spawn = struct {
         prio: i32, // unused in musl
         pol: i32, // unused in musl
         @"fn": ?*anyopaque, // *fn () requires a return type, which we dont know
+        _padding: [64 - @sizeOf(usize)]u8,
         // do we need padding by 64-@sizeOf(void*) => usize?
 
         pub fn init() Attr {
             return Attr{
                 .flags = 0,
-                .pid = 0,
-                .sigdef = 0,
-                .mask = 0,
+                .pgrp = 0,
+                .sigdef = [_]u32{0} ** 32,
+                //.sigmask = std.mem.set(@TypeOf(Attr.sigmask),sigdef,0),
+                .sigmask = [_]u32{0} ** 32,
                 .prio = 0,
                 .pol = 0,
                 .@"fn" = null, // does this compile?
+                ._padding = undefined,
             };
         }
 
@@ -120,43 +133,46 @@ const zig_spawn = struct {
             self.* = undefined;
         }
 
-        pub fn setDefaultFlags(self: *Attr, flags: u16) void {
+        pub fn setFlags(self: *Attr, flags: u16) void {
             // TODO improve this for non-musl targets
-            comptime {
-                const all_flags =
-                    POSIX_SPAWN_RESETIDS |
-                    POSIX_SPAWN_SETPGROUP |
-                    POSIX_SPAWN_SETSIGDEF |
-                    POSIX_SPAWN_SETSIGMASK |
-                    POSIX_SPAWN_SETSCHEDPARAM |
-                    POSIX_SPAWN_SETSCHEDULER |
-                    POSIX_SPAWN_USEVFORK |
-                    POSIX_SPAWN_SETSID;
-                if (flags & ~all_flags > 0) @compileError("invalid default fields");
-            }
+            const all_flags =
+                POSIX_SPAWN_RESETIDS |
+                POSIX_SPAWN_SETPGROUP |
+                POSIX_SPAWN_SETSIGDEF |
+                POSIX_SPAWN_SETSIGMASK |
+                POSIX_SPAWN_SETSCHEDPARAM |
+                POSIX_SPAWN_SETSCHEDULER |
+                POSIX_SPAWN_USEVFORK |
+                POSIX_SPAWN_SETSID;
+            if (flags & ~@as(u16, all_flags) > 0) @panic("no attribute flags were set");
             self.flags = flags;
         }
     };
 
     // C layout with padding?
-    pub const Actions = struct {
+    pub const Actions = extern struct {
         // int __pad0[2]; padding?
         // can we make the following *fn () void by providing our own action functions?
-        actions: ?*anyopaque, // void *__actions; => can we make this type safe?
+        _padding0: [2]c_int,
+        actions: ?*Fdop, // void *__actions; in musl
+        _padding1: [16]c_int,
         // int __pad[16]; paading?
 
-        pub fn init() Error!Actions {
+        pub fn init() Actions {
             return Actions{
+                ._padding0 = undefined,
                 .actions = null,
+                ._padding1 = undefined,
             };
         }
 
+        // assume: memory was allocated all with allocator alloc
         pub fn deinit(self: *Actions, alloc: std.mem.Allocator) void {
             // TODO fix the ugly musl code with sequence operator
-            var op: ?*Fdop = self.actions;
+            var op = self.actions;
             while (op) |opval| {
-                alloc.free(opval);
                 op = opval.next;
+                alloc.destroy(opval);
             }
             self.* = undefined;
         }
@@ -238,20 +254,38 @@ const zig_spawn = struct {
         //}
     };
 
-    const Args = struct {
+    fn sigmask(how: c_int, set: *const system.sigset_t, old: *const system.sigset_t) Error!void {
+        if (@bitCast(c_uint, how) - system.SIG.BLOCK > 2)
+            return error.InvalidSignalMask;
+        switch (errno(system.rt_sigprocmask(how, set, old, system.NSIG / 8))) {
+            .SUCCESS => {
+                // *const system.sigset_t should be *const[8]u32
+                if (@sizeOf(old.*[0]) == 8) {
+                    old.*[0] &= ~@as(u64, 0x380000000);
+                } else {
+                    old.*[0] &= ~@as(u32, 0x80000000);
+                    old.*[1] &= ~@as(u32, 0x3);
+                }
+            },
+            .INVAL => return error.InvalidSignalMask,
+            else => |err| return unexpectedErrno(err),
+        }
+    }
+
+    const Args = extern struct {
         p: [2]c_int,
         oldmask: os.sigset_t,
-        path: []const u8,
-        fa: *const Actions,
-        attr: *Attr,
+        path: [*:0]const u8,
+        fa: ?*const Actions,
+        attr: ?*const Attr,
         argv: [*:null]?[*:0]const u8,
         envp: [*:null]?[*:0]const u8,
     };
 
     pub fn spawn(
         path: []const u8,
-        actions: ?Actions,
-        attr: ?Attr,
+        actions: ?*const Actions,
+        attr: ?*const Attr,
         argv: [*:null]?[*:0]const u8,
         envp: [*:null]?[*:0]const u8,
     ) Error!pid_t {
@@ -261,8 +295,8 @@ const zig_spawn = struct {
 
     pub fn spawnZ(
         path: [*:0]const u8,
-        actions: ?Actions,
-        attr: ?Attr,
+        actions: ?*const Actions,
+        attr: ?*const Attr,
         argv: [*:null]?[*:0]const u8,
         envp: [*:null]?[*:0]const u8,
     ) Error!pid_t {
@@ -272,6 +306,7 @@ const zig_spawn = struct {
         // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cs);
         var args = Args{
             .p = undefined,
+            .oldmask = undefined,
             .path = path,
             .fa = actions,
             .attr = attr,
@@ -283,13 +318,13 @@ const zig_spawn = struct {
         //LOCK(__abort_lock);
 
         //if (pipe2(args.p, O_CLOEXEC)) {
-        //	UNLOCK(__abort_lock);
-        //	ec = errno;
-        //	goto fail;
+        //    UNLOCK(__abort_lock);
+        //    ec = errno;
+        //    goto fail;
         //}
 
         const flags: u32 = system.CLONE.VM | system.CLONE.VFORK | system.SIG.CHLD;
-        // Linux for now
+        // Linux for now: TODO catch errors
         pid = system.clone(child(), @ptrToInt(stack.ptr) + @sizeOf(stack), flags, &args);
         // close(args.p[1]);
         // UNLOCK(__abort_lock);
@@ -310,7 +345,7 @@ const zig_spawn = struct {
         //close(args.p[0]);
         //if (!ec && res) *res = pid; // error code and res == 0
 
-        //fail:
+        sigmask(system.SIG.BLOCK, SIGALL, &args.oldmask);
         //pthread_sigmask(SIG_SETMASK, &args.oldmask, 0);
         //pthread_setcancelstate(cs, 0);
         //
@@ -436,3 +471,39 @@ const zig_spawn = struct {
         }
     }
 };
+
+test "zig spawn" {
+    const alloc = std.testing.allocator;
+    var attr = zig_spawn.Attr.init();
+    defer attr.deinit();
+    var flags: u16 = POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK;
+    attr.setFlags(flags);
+    var actions = zig_spawn.Actions.init();
+    defer actions.deinit(alloc);
+
+    //try fs.path.join(allocator, &[_][]const u8{ tmpdirpath, child_name });
+    const argv = &[_][]const u8{ "echo", "hello world" };
+
+    const argv_buf = try alloc.allocSentinel(?[*:0]u8, argv.len, null);
+    for (argv) |arg, i| argv_buf[i] = (try alloc.dupeZ(u8, arg)).ptr;
+
+    //var env = try std.process.getEnvMap(std.testing.allocator);
+    //defer env.deinit();
+    //@compileLog(@TypeOf(env));
+
+    // var removes complain expected type '*std.buf_map.BufMap', found '*const std.buf_map.BufMap'
+    var env_map = try std.process.getEnvMap(alloc);
+    defer env_map.deinit();
+
+    const envp_buf = try child_process.createNullDelimitedEnvMap(alloc, &env_map);
+    const envp = envp_buf.ptr;
+
+    //@compileLog(@TypeOf(env_map));
+    //@compileLog(@TypeOf(envp_buf));
+
+    const pid = try zig_spawn.spawn(argv[0], &actions, &attr, argv_buf, envp);
+    _ = pid;
+
+    // TODO write stuff from other process
+    // TODO wait in other process for debugging in gcc
+}
