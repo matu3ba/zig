@@ -47,8 +47,9 @@ const pid_t = system.pid_t;
 //} || UnexpectedError;
 
 pub const Error = error{
-    InvalidSignalMask,
     ChildExecFailed,
+    InvalidSignalMask,
+    NameTooLong,
 } || UnexpectedError;
 
 // TODO make this cross platform (pull in other symbols depending on libc/darwin)
@@ -93,7 +94,7 @@ pub const SpawnConfig = struct {
 };
 
 pub const zig_spawn = struct {
-    pub const SIGALL = 0xffffffff_ffffffff; // hack
+    pub const SIGALL = @as(u64, 0xffffffff_ffffffff); // hack
     //typedef struct {
     // int __flags;
     // pid_t __pgrp;
@@ -254,10 +255,11 @@ pub const zig_spawn = struct {
         //}
     };
 
+    // TODO check handling of sigprocmask (usize) ?
     fn sigmask(how: c_int, set: *const system.sigset_t, old: *const system.sigset_t) Error!void {
         if (@bitCast(c_uint, how) - system.SIG.BLOCK > 2)
             return error.InvalidSignalMask;
-        switch (errno(system.rt_sigprocmask(how, set, old, system.NSIG / 8))) {
+        switch (errno(system.sigprocmask(how, set, old))) {
             .SUCCESS => {
                 // *const system.sigset_t should be *const[8]u32
                 if (@sizeOf(old.*[0]) == 8) {
@@ -267,6 +269,7 @@ pub const zig_spawn = struct {
                     old.*[1] &= ~@as(u32, 0x3);
                 }
             },
+            // TODO likely incomplete, need to check!
             .INVAL => return error.InvalidSignalMask,
             else => |err| return unexpectedErrno(err),
         }
@@ -315,6 +318,7 @@ pub const zig_spawn = struct {
         };
         // guard page etc to prevent stack smashing?
         // pthread_sigmask(SIG_BLOCK, SIGALL_SET, &args.oldmask);
+        // TODO coercion to '*const [32]u32' instead of 'comptime_int'
         sigmask(system.SIG.BLOCK, zig_spawn.SIGALL, &args.oldmask);
         // lock guards aggainst SIABRT disposition change by abort and leaking
         // pipe fd to fork-without-exec
