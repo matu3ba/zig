@@ -28,6 +28,10 @@ pub const ChildProcess = struct {
     stdin: ?File,
     stdout: ?File,
     stderr: ?File,
+    /// Additional streams other than stdin, stdout, stderr
+    /// * only unidirectional input xor output pipe for portability.
+    /// * default value null means no creation of additional IO streams
+    extra_streams: ?[]ExtraStream,
 
     term: ?(SpawnError!Term),
 
@@ -97,6 +101,30 @@ pub const ChildProcess = struct {
         Close,
     };
 
+    pub const ExtraStreamIo = enum {
+        out,
+        in,
+    };
+
+    /// ChildProcess may be a global struct shared between parent and child process
+    /// or user may need access to child handle to send the pipe handle to the child.
+    /// Parent process closes the file handles.
+    pub const ExtraStream = struct {
+        /// Initialize this field to null and only use it after spawn().
+        /// The parent is supposed to use this file handle.
+        parent: ?File,
+        /// Initialize this field to null and only use it after spawn().
+        /// The child is supposed to use this file handle.
+        child: ?File,
+        /// The user must always initialize this field and not change it during
+        /// child process execution.
+        /// Setting behavior to `out` creates parent->child pipe, so parent is `out`
+        /// and child is `in`. Vice versa for setting behavior to `in`.
+        /// Reading from a pipe end intended for output and writing to a pipe end
+        /// intended for input is Undefined Behavior.
+        behavior: ExtraStreamIo,
+    };
+
     /// First argument in argv is the executable.
     pub fn init(argv: []const []const u8, allocator: mem.Allocator) ChildProcess {
         return .{
@@ -114,6 +142,7 @@ pub const ChildProcess = struct {
             .stdin = null,
             .stdout = null,
             .stderr = null,
+            .extra_streams = null,
             .stdin_behavior = StdIo.Inherit,
             .stdout_behavior = StdIo.Inherit,
             .stderr_behavior = StdIo.Inherit,
@@ -491,6 +520,21 @@ pub const ChildProcess = struct {
             stderr.close();
             self.stderr = null;
         }
+        // TODO descriptors of the child process are not cleaned up!
+        // child_process must contain both file descriptors
+        // ideas:
+        // - child and parent as fields of struct
+        // - switch prong on Input or Output
+        // - tag fd_t with field reader and writer
+        // - more stuff?
+        if (self.extra_streams) |extra_streams| {
+            for (extra_streams) |*extra_stream| {
+                if (extra_stream.stream) |*stream| {
+                    stream.close();
+                    extra_stream.stream = null;
+                }
+            }
+        }
     }
 
     fn cleanupAfterWait(self: *ChildProcess, status: u32) !Term {
@@ -555,6 +599,28 @@ pub const ChildProcess = struct {
         const stderr_pipe = if (self.stderr_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
         errdefer if (self.stderr_behavior == StdIo.Pipe) destroyPipe(stderr_pipe);
 
+        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_allocator.deinit();
+        const arena = arena_allocator.allocator();
+
+        // temporary allocation for both pipe ends (we throw away one after closing)
+        const extra_pipes = impl: {
+            if (self.extra_streams) {
+                break :impl try arena.alloc([2]os.fd_t, self.extra_streams.?.len);
+            } else {
+                break :impl undefined;
+            }
+        };
+
+        for (extra_pipes) |*extra_pipe, i| {
+            extra_pipe.* = os.pipe2(pipe_flags) catch |err| {
+                for (extra_pipes[0..i]) |prev| {
+                    destroyPipe(prev);
+                }
+                return err;
+            };
+        }
+
         const any_ignore = (self.stdin_behavior == StdIo.Ignore or self.stdout_behavior == StdIo.Ignore or self.stderr_behavior == StdIo.Ignore);
         const dev_null_fd = if (any_ignore)
             os.openZ("/dev/null", os.O.RDWR, 0) catch |err| switch (err) {
@@ -587,15 +653,17 @@ pub const ChildProcess = struct {
         try setUpChildIoPosixSpawn(self.stdout_behavior, &actions, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
         try setUpChildIoPosixSpawn(self.stderr_behavior, &actions, stderr_pipe, os.STDERR_FILENO, dev_null_fd);
 
+        //pipe_fd: [2]i32,
+        //idx 0 for stdin and 1 for stdout
+        //const newfd: [2]i32= try os.dup(pipe_fd[idx]);
+        //try actions.close(pipe_fd[1 - idx]); // idx 0 for stdin and 1 for stdout
+        // TODO use pipe(), not pipe2
+
         if (self.cwd_dir) |cwd| {
             try actions.fchdir(cwd.fd);
         } else if (self.cwd) |cwd| {
             try actions.chdir(cwd);
         }
-
-        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_allocator.deinit();
-        const arena = arena_allocator.allocator();
 
         const argv_buf = try arena.allocSentinel(?[*:0]u8, self.argv.len, null);
         for (self.argv) |arg, i| argv_buf[i] = (try arena.dupeZ(u8, arg)).ptr;
@@ -621,6 +689,17 @@ pub const ChildProcess = struct {
             self.stderr = File{ .handle = stderr_pipe[0] };
         } else {
             self.stderr = null;
+        }
+
+        if (self.extra_streams) |extra_streams| {
+            for (extra_streams) |*extra_stream| {
+                if (extra_stream.stream) |*stream| {
+                    // get fd + assign it
+                    // close one end of the pipe depending on output or input
+                    stream.close();
+                    extra_stream.stream = null;
+                }
+            }
         }
 
         self.pid = pid;
@@ -1410,4 +1489,23 @@ test "creating a child process with stdin and stdout behavior set to StdIo.Pipe"
         },
         else => unreachable,
     }
+}
+
+test "ChildProcess with extra streams" {
+    if (builtin.os.tag == .wasi) return error.SkipZigTest;
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var child_process = ChildProcess.init(
+        &[_][]const u8{ testing.zig_exe_path, "--help" },
+        allocator,
+    );
+    child_process.stdout_behavior = .Ignore;
+    // TODO helper method to make this more convenient/less annoying.
+    var stream_opt = [_]ChildProcess.ExtraStream{
+        .{ .parent = undefined, .child = undefined, .behavior = .out },
+    };
+    child_process.extra_streams = &stream_opt;
+    const ret_val = try child_process.spawnAndWait();
+    try testing.expectEqual(ret_val, .{ .Exited = 0 });
 }
