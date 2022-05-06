@@ -4562,7 +4562,6 @@ pub fn pipe() PipeError![2]fd_t {
     var fds: [2]fd_t = undefined;
     switch (errno(system.pipe(&fds))) {
         .SUCCESS => return fds,
-        .INVAL => unreachable, // Invalid parameters to pipe()
         .FAULT => unreachable, // Invalid fds pointer
         .NFILE => return error.SystemFdQuotaExceeded,
         .MFILE => return error.ProcessFdQuotaExceeded,

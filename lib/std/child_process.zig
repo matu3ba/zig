@@ -106,23 +106,22 @@ pub const ChildProcess = struct {
         in,
     };
 
+    /// ExtraStream (= pipe) must be used unidirected (in->out) for portability.
     /// ChildProcess may be a global struct shared between parent and child process
-    /// or user may need access to child handle to send the pipe handle to the child.
-    /// Parent process closes the file handles.
+    /// or parent may need access to the pipe handle to send it to the child process.
+    /// Use initExtraStreams() and deinitExtraStreams() to open and close file handles
+    /// TODO ensure that stuff is != null in spawn()
     pub const ExtraStream = struct {
-        /// Initialize this field to null and only use it after spawn().
-        /// The parent is supposed to use this file handle.
-        parent: ?File,
-        /// Initialize this field to null and only use it after spawn().
-        /// The child is supposed to use this file handle.
-        child: ?File,
-        /// The user must always initialize this field and not change it during
-        /// child process execution.
-        /// Setting behavior to `out` creates parent->child pipe, so parent is `out`
-        /// and child is `in`. Vice versa for setting behavior to `in`.
-        /// Reading from a pipe end intended for output and writing to a pipe end
-        /// intended for input is Undefined Behavior.
-        behavior: ExtraStreamIo,
+        /// The parent is supposed to use the open file handle.
+        parent: union(ExtraStreamIo) {
+            in: ?File,
+            out: ?File,
+        },
+        /// The child is supposed to use the open file handle.
+        child: union(ExtraStreamIo) {
+            in: ?File,
+            out: ?File,
+        },
     };
 
     /// First argument in argv is the executable.
@@ -157,6 +156,7 @@ pub const ChildProcess = struct {
     }
 
     /// On success must call `kill` or `wait`.
+    /// Error: clean up file handles with cleanupExtraStreams();
     pub fn spawn(self: *ChildProcess) SpawnError!void {
         if (!std.process.can_spawn) {
             @compileError("the target operating system cannot spawn processes");
@@ -507,6 +507,8 @@ pub const ChildProcess = struct {
         self.term = self.cleanupAfterWait(status);
     }
 
+    /// Close file handles, if they were not closed in the meantime
+    /// TODO: Are standard handles from child leaked?
     fn cleanupStreams(self: *ChildProcess) void {
         if (self.stdin) |*stdin| {
             stdin.close();
@@ -520,18 +522,21 @@ pub const ChildProcess = struct {
             stderr.close();
             self.stderr = null;
         }
-        // TODO descriptors of the child process are not cleaned up!
-        // child_process must contain both file descriptors
-        // ideas:
-        // - child and parent as fields of struct
-        // - switch prong on Input or Output
-        // - tag fd_t with field reader and writer
-        // - more stuff?
+        // TODO move this into extra function
+    }
+
+    pub fn deinitExtraStreams(self: *ChildProcess) void {
         if (self.extra_streams) |extra_streams| {
-            for (extra_streams) |*extra_stream| {
-                if (extra_stream.stream) |*stream| {
-                    stream.close();
-                    extra_stream.stream = null;
+            for (extra_streams) |*extra| {
+                const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                std.debug.assert(unidirect);
+                switch (extra.parent) {
+                    .in, .out => |*opt_file| {
+                        if (opt_file.*) |*file| {
+                            file.close();
+                            opt_file.* = null;
+                        }
+                    },
                 }
             }
         }
@@ -599,26 +604,43 @@ pub const ChildProcess = struct {
         const stderr_pipe = if (self.stderr_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
         errdefer if (self.stderr_behavior == StdIo.Pipe) destroyPipe(stderr_pipe);
 
-        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_allocator.deinit();
-        const arena = arena_allocator.allocator();
+        {
+            // setup extra_streams (tags ensure that user does not use the wrong pipe end)
+            var tmp_pipe: [2]os.fd_t = undefined;
+            if (self.extra_streams) |extra_streams| {
+                for (extra_streams) |*extra, i| {
+                    const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                    std.debug.assert(unidirect);
+                    tmp_pipe = os.pipe() catch |err| {
+                        for (extra_streams[0..i]) |prev| {
+                            destroyPipe(prev);
+                        }
+                        return err;
+                    };
 
-        // temporary allocation for both pipe ends (we throw away one after closing)
-        const extra_pipes = impl: {
-            if (self.extra_streams) {
-                break :impl try arena.alloc([2]os.fd_t, self.extra_streams.?.len);
-            } else {
-                break :impl undefined;
-            }
-        };
+                    switch (extra.parent) {
+                        .in => |*opt_file| {
+                            std.debug.assert(opt_file == null);
+                            opt_file.* = File{ .handle = tmp_pipe[1] };
+                        },
+                        .out => |*opt_file| {
+                            std.debug.assert(opt_file == null);
+                            opt_file.* = File{ .handle = tmp_pipe[0] };
+                        },
+                    }
 
-        for (extra_pipes) |*extra_pipe, i| {
-            extra_pipe.* = os.pipe2(pipe_flags) catch |err| {
-                for (extra_pipes[0..i]) |prev| {
-                    destroyPipe(prev);
+                    switch (extra.child) {
+                        .in => |*opt_file| {
+                            std.debug.assert(opt_file == null);
+                            opt_file.* = File{ .handle = tmp_pipe[1] };
+                        },
+                        .out => |*opt_file| {
+                            std.debug.assert(opt_file == null);
+                            opt_file.* = File{ .handle = tmp_pipe[0] };
+                        },
+                    }
                 }
-                return err;
-            };
+            }
         }
 
         const any_ignore = (self.stdin_behavior == StdIo.Ignore or self.stdout_behavior == StdIo.Ignore or self.stderr_behavior == StdIo.Ignore);
@@ -664,6 +686,10 @@ pub const ChildProcess = struct {
         } else if (self.cwd) |cwd| {
             try actions.chdir(cwd);
         }
+
+        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena_allocator.deinit();
+        const arena = arena_allocator.allocator();
 
         const argv_buf = try arena.allocSentinel(?[*:0]u8, self.argv.len, null);
         for (self.argv) |arg, i| argv_buf[i] = (try arena.dupeZ(u8, arg)).ptr;
@@ -1491,21 +1517,65 @@ test "creating a child process with stdin and stdout behavior set to StdIo.Pipe"
     }
 }
 
+// TODO parse file descriptor values from stdin
+const child_str2 =
+    \\ const std = @import("std");
+    \\ const builtin = @import("builtin");
+    \\ pub fn main() !void {
+    \\     var it = try std.process.argsWithAllocator(std.testing.allocator);
+    \\     defer it.deinit(); // no-op unless WASI or Windows
+    \\     _ = it.next() orelse unreachable; // skip binary name
+    \\     const input = it.next() orelse unreachable;
+    \\     var expect_helloworld = "hello world".*;
+    \\     try std.testing.expect(std.mem.eql(u8, &expect_helloworld, input));
+    \\     try std.testing.expect(it.next() == null);
+    \\     try std.testing.expect(!it.skip());
+    \\ }
+;
+
 test "ChildProcess with extra streams" {
     if (builtin.os.tag == .wasi) return error.SkipZigTest;
     const testing = std.testing;
     const allocator = testing.allocator;
 
+    var it = try std.process.argsWithAllocator(allocator);
+    defer it.deinit(); // no-op unless WASI or Windows
+    const testargs = try testing.getTestArgs(&it);
+
+    //var buf: [10]u8 = undefined; // 2**32 has 10 digits
+    // u8 buffer
+
+    var tmp = testing.tmpDir(.{ .no_follow = true }); // ie zig-cache/tmp/8DLgoSEqz593PAEE
+    defer tmp.cleanup();
+    const tmpdirpath = try tmp.getFullPath(allocator);
+    defer allocator.free(tmpdirpath);
+    const child_name = "child"; // no need for suffixes (.exe, .wasm) due to '-femit-bin'
+    const suffix_zig = ".zig";
+    const child_path = try fs.path.join(allocator, &[_][]const u8{ tmpdirpath, child_name });
+    defer allocator.free(child_path);
+    const child_zig = try mem.concat(allocator, u8, &[_][]const u8{ child_path, suffix_zig });
+    defer allocator.free(child_zig);
+
+    try tmp.dir.writeFile("child.zig", child_str2);
+    try testing.buildExe(testargs.zigexec, child_zig, child_path);
+
+    // spawn compiled file as child_process with argument 'hello world' + expect success
+    //const args = [_][]const u8{ child_path, "" };
+
     var child_process = ChildProcess.init(
-        &[_][]const u8{ testing.zig_exe_path, "--help" },
+        &[_][]const u8{""},
         allocator,
     );
-    child_process.stdout_behavior = .Ignore;
+    child_process.argv = &[_][]const u8{ testing.zig_exe_path, "--help" };
+    //child_process.stdout_behavior = .Ignore;
     // TODO helper method to make this more convenient/less annoying.
-    var stream_opt = [_]ChildProcess.ExtraStream{
-        .{ .parent = undefined, .child = undefined, .behavior = .out },
+    var extra_streams = [_]ChildProcess.ExtraStream{
+        .{ .parent = .{ .in = null }, .child = .{ .out = null } },
     };
-    child_process.extra_streams = &stream_opt;
+    child_process.extra_streams = &extra_streams;
+    //const s_start_index = try std.fmt.bufPrint(buf[0..], "{d}", .{child_process.extra_streams[0].child.out});
+
     const ret_val = try child_process.spawnAndWait();
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
+    // TODO get returned values
 }
