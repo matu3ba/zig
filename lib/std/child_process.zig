@@ -114,12 +114,16 @@ pub const ChildProcess = struct {
     pub const ExtraStream = struct {
         /// The parent is supposed to use the open file handle.
         parent: union(ExtraStreamIo) {
+            /// in for write input means the file should only be written
             in: ?File,
+            /// out for read ouput means the file should only be read
             out: ?File,
         },
         /// The child is supposed to use the open file handle.
         child: union(ExtraStreamIo) {
+            /// in for write input means the file should only be written
             in: ?File,
+            /// out for read ouput means the file should only be read
             out: ?File,
         },
     };
@@ -149,6 +153,60 @@ pub const ChildProcess = struct {
         };
     }
 
+    /// Check pipe direction tags, open pipe and assign it to file handles
+    /// Check for tags is repeated at beginning of spawn() in Debug mode
+    pub fn initExtraStreams(self: *ChildProcess) os.PipeError!void {
+        // tags ensure that user does not use the wrong pipe end
+        var tmp_pipe: [2]os.fd_t = undefined;
+        if (self.extra_streams) |extra_streams| {
+            for (extra_streams) |*extra, i| {
+                const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                std.debug.assert(unidirect);
+                tmp_pipe = os.pipe() catch |err| {
+                    for (extra_streams[0..i]) |*err_extra| {
+                        switch (err_extra.parent) {
+                            .out, .in => |*opt_file| {
+                                std.debug.assert(opt_file.* != null);
+                                os.close(opt_file.*.?.handle);
+                                opt_file.* = null;
+                            },
+                        }
+                        switch (err_extra.child) {
+                            .out, .in => |*opt_file| {
+                                std.debug.assert(opt_file.* != null);
+                                os.close(opt_file.*.?.handle);
+                                opt_file.* = null;
+                            },
+                        }
+                    }
+                    return err;
+                };
+
+                switch (extra.parent) {
+                    .in => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        opt_file.* = File{ .handle = tmp_pipe[1] };
+                    },
+                    .out => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        opt_file.* = File{ .handle = tmp_pipe[0] };
+                    },
+                }
+
+                switch (extra.child) {
+                    .in => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        opt_file.* = File{ .handle = tmp_pipe[1] };
+                    },
+                    .out => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        opt_file.* = File{ .handle = tmp_pipe[0] };
+                    },
+                }
+            }
+        }
+    }
+
     pub fn setUserName(self: *ChildProcess, name: []const u8) !void {
         const user_info = try os.getUserInfo(name);
         self.uid = user_info.uid;
@@ -156,7 +214,6 @@ pub const ChildProcess = struct {
     }
 
     /// On success must call `kill` or `wait`.
-    /// Error: clean up file handles with cleanupExtraStreams();
     pub fn spawn(self: *ChildProcess) SpawnError!void {
         if (!std.process.can_spawn) {
             @compileError("the target operating system cannot spawn processes");
@@ -604,7 +661,8 @@ pub const ChildProcess = struct {
         const stderr_pipe = if (self.stderr_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
         errdefer if (self.stderr_behavior == StdIo.Pipe) destroyPipe(stderr_pipe);
 
-        {
+        if (std.builtin.mode == .Debug) {
+            // safety-check all tags
             // setup extra_streams (tags ensure that user does not use the wrong pipe end)
             var tmp_pipe: [2]os.fd_t = undefined;
             if (self.extra_streams) |extra_streams| {
@@ -1542,9 +1600,6 @@ test "ChildProcess with extra streams" {
     defer it.deinit(); // no-op unless WASI or Windows
     const testargs = try testing.getTestArgs(&it);
 
-    //var buf: [10]u8 = undefined; // 2**32 has 10 digits
-    // u8 buffer
-
     var tmp = testing.tmpDir(.{ .no_follow = true }); // ie zig-cache/tmp/8DLgoSEqz593PAEE
     defer tmp.cleanup();
     const tmpdirpath = try tmp.getFullPath(allocator);
@@ -1561,19 +1616,27 @@ test "ChildProcess with extra streams" {
 
     // spawn compiled file as child_process with argument 'hello world' + expect success
     //const args = [_][]const u8{ child_path, "" };
-
+    var buf: [11]u8 = undefined; // -2**32 has 11 digits
+    // u8 buffer
+    _ = buf;
     var child_process = ChildProcess.init(
         &[_][]const u8{""},
         allocator,
     );
-    child_process.argv = &[_][]const u8{ testing.zig_exe_path, "--help" };
-    //child_process.stdout_behavior = .Ignore;
-    // TODO helper method to make this more convenient/less annoying.
     var extra_streams = [_]ChildProcess.ExtraStream{
         .{ .parent = .{ .in = null }, .child = .{ .out = null } },
     };
     child_process.extra_streams = &extra_streams;
-    //const s_start_index = try std.fmt.bufPrint(buf[0..], "{d}", .{child_process.extra_streams[0].child.out});
+    try child_process.initExtraStreams();
+    defer child_process.deinitExtraStreams();
+    // TODO make this less ugly
+    std.debug.print("child_process.extra_streams.?[0].child.out: {d}\n", .{child_process.extra_streams.?[0].child.out.?.handle});
+    const s_chpipe_h = try std.fmt.bufPrint(buf[0..], "{d}", .{child_process.extra_streams.?[0].child.out.?.handle});
+    std.debug.print("s_chpipe_h: {s}\n", .{s_chpipe_h});
+
+    child_process.argv = &[_][]const u8{ testing.zig_exe_path, "--help" };
+    //child_process.stdout_behavior = .Ignore;
+    // TODO helper method to make this more convenient/less annoying.
 
     const ret_val = try child_process.spawnAndWait();
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
