@@ -110,6 +110,11 @@ pub const ChildProcess = struct {
     /// ChildProcess may be a global struct shared between parent and child process
     /// or parent may need access to the pipe handle to send it to the child process.
     /// Use initExtraStreams() and deinitExtraStreams() to open and close file handles
+    ///
+    /// * The parent process will try to close the file handle in deinitExtraStreams()
+    /// TODO correctness check vs child can close its file handle:
+    /// > If the child should handle file handle closing, set the optional ?File
+    ///   of the child to null after initExtraStreams()
     /// TODO ensure that stuff is != null in spawn()
     pub const ExtraStream = struct {
         /// The parent is supposed to use the open file handle.
@@ -579,7 +584,6 @@ pub const ChildProcess = struct {
             stderr.close();
             self.stderr = null;
         }
-        // TODO move this into extra function
     }
 
     pub fn deinitExtraStreams(self: *ChildProcess) void {
@@ -661,40 +665,31 @@ pub const ChildProcess = struct {
         const stderr_pipe = if (self.stderr_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
         errdefer if (self.stderr_behavior == StdIo.Pipe) destroyPipe(stderr_pipe);
 
-        if (std.builtin.mode == .Debug) {
+        //if (std.builtin.mode == .Debug)
+        {
+            std.debug.print("enter debug\n", .{});
             // safety-check all tags
             // setup extra_streams (tags ensure that user does not use the wrong pipe end)
-            var tmp_pipe: [2]os.fd_t = undefined;
             if (self.extra_streams) |extra_streams| {
-                for (extra_streams) |*extra, i| {
+                for (extra_streams) |extra| {
                     const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
                     std.debug.assert(unidirect);
-                    tmp_pipe = os.pipe() catch |err| {
-                        for (extra_streams[0..i]) |prev| {
-                            destroyPipe(prev);
-                        }
-                        return err;
-                    };
 
                     switch (extra.parent) {
-                        .in => |*opt_file| {
-                            std.debug.assert(opt_file == null);
-                            opt_file.* = File{ .handle = tmp_pipe[1] };
+                        .in => |opt_file| {
+                            std.debug.assert(opt_file != null);
                         },
-                        .out => |*opt_file| {
-                            std.debug.assert(opt_file == null);
-                            opt_file.* = File{ .handle = tmp_pipe[0] };
+                        .out => |opt_file| {
+                            std.debug.assert(opt_file != null);
                         },
                     }
 
                     switch (extra.child) {
-                        .in => |*opt_file| {
-                            std.debug.assert(opt_file == null);
-                            opt_file.* = File{ .handle = tmp_pipe[1] };
+                        .in => |opt_file| {
+                            std.debug.assert(opt_file != null);
                         },
-                        .out => |*opt_file| {
-                            std.debug.assert(opt_file == null);
-                            opt_file.* = File{ .handle = tmp_pipe[0] };
+                        .out => |opt_file| {
+                            std.debug.assert(opt_file != null);
                         },
                     }
                 }
@@ -733,12 +728,6 @@ pub const ChildProcess = struct {
         try setUpChildIoPosixSpawn(self.stdout_behavior, &actions, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
         try setUpChildIoPosixSpawn(self.stderr_behavior, &actions, stderr_pipe, os.STDERR_FILENO, dev_null_fd);
 
-        //pipe_fd: [2]i32,
-        //idx 0 for stdin and 1 for stdout
-        //const newfd: [2]i32= try os.dup(pipe_fd[idx]);
-        //try actions.close(pipe_fd[1 - idx]); // idx 0 for stdin and 1 for stdout
-        // TODO use pipe(), not pipe2
-
         if (self.cwd_dir) |cwd| {
             try actions.fchdir(cwd.fd);
         } else if (self.cwd) |cwd| {
@@ -773,17 +762,6 @@ pub const ChildProcess = struct {
             self.stderr = File{ .handle = stderr_pipe[0] };
         } else {
             self.stderr = null;
-        }
-
-        if (self.extra_streams) |extra_streams| {
-            for (extra_streams) |*extra_stream| {
-                if (extra_stream.stream) |*stream| {
-                    // get fd + assign it
-                    // close one end of the pipe depending on output or input
-                    stream.close();
-                    extra_stream.stream = null;
-                }
-            }
         }
 
         self.pid = pid;
@@ -853,6 +831,36 @@ pub const ChildProcess = struct {
             undefined;
         defer {
             if (any_ignore) os.close(dev_null_fd);
+        }
+
+        {
+            std.debug.print("enter debug\n", .{});
+            // safety-check all tags
+            // setup extra_streams (tags ensure that user does not use the wrong pipe end)
+            if (self.extra_streams) |extra_streams| {
+                for (extra_streams) |extra| {
+                    const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                    std.debug.assert(unidirect);
+
+                    switch (extra.parent) {
+                        .in => |opt_file| {
+                            std.debug.assert(opt_file != null);
+                        },
+                        .out => |opt_file| {
+                            std.debug.assert(opt_file != null);
+                        },
+                    }
+
+                    switch (extra.child) {
+                        .in => |opt_file| {
+                            std.debug.assert(opt_file != null);
+                        },
+                        .out => |opt_file| {
+                            std.debug.assert(opt_file != null);
+                        },
+                    }
+                }
+            }
         }
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
@@ -1575,7 +1583,8 @@ test "creating a child process with stdin and stdout behavior set to StdIo.Pipe"
     }
 }
 
-// TODO parse file descriptor values from stdin
+// open file handle is sent (fd_t) via pipe and we also dont close it, since
+// there is overhead to tell the parent process that we have closed it
 const child_str2 =
     \\ const std = @import("std");
     \\ const builtin = @import("builtin");
@@ -1583,11 +1592,19 @@ const child_str2 =
     \\     var it = try std.process.argsWithAllocator(std.testing.allocator);
     \\     defer it.deinit(); // no-op unless WASI or Windows
     \\     _ = it.next() orelse unreachable; // skip binary name
-    \\     const input = it.next() orelse unreachable;
-    \\     var expect_helloworld = "hello world".*;
-    \\     try std.testing.expect(std.mem.eql(u8, &expect_helloworld, input));
+    \\     const s_file_handle = it.next() orelse unreachable;
     \\     try std.testing.expect(it.next() == null);
     \\     try std.testing.expect(!it.skip());
+    \\     //std.debug.print("std.os.fd_t: {s}\n", .{std.os.fd_t});
+    \\     const file_handle = try std.fmt.parseInt(std.os.fd_t, s_file_handle, 10);
+    \\     std.debug.print("file_handle: {d}\n", .{file_handle});
+    \\     var stream_in = std.fs.File{ .handle = file_handle };
+    \\     std.debug.print("here1\n", .{});
+    \\     const input = try stream_in.reader().readAllAlloc(std.testing.allocator, std.math.maxInt(usize));
+    \\     std.debug.print("here2\n", .{});
+    \\     defer std.testing.allocator.free(input);
+    \\     var expected = "test123";
+    \\     try std.testing.expect(std.mem.eql(u8, expected, input));
     \\ }
 ;
 
@@ -1615,14 +1632,13 @@ test "ChildProcess with extra streams" {
     try testing.buildExe(testargs.zigexec, child_zig, child_path);
 
     // spawn compiled file as child_process with argument 'hello world' + expect success
-    //const args = [_][]const u8{ child_path, "" };
     var buf: [11]u8 = undefined; // -2**32 has 11 digits
     // u8 buffer
-    _ = buf;
     var child_process = ChildProcess.init(
         &[_][]const u8{""},
         allocator,
     );
+    // TODO make this less ugly
     var extra_streams = [_]ChildProcess.ExtraStream{
         .{ .parent = .{ .in = null }, .child = .{ .out = null } },
     };
@@ -1633,12 +1649,17 @@ test "ChildProcess with extra streams" {
     std.debug.print("child_process.extra_streams.?[0].child.out: {d}\n", .{child_process.extra_streams.?[0].child.out.?.handle});
     const s_chpipe_h = try std.fmt.bufPrint(buf[0..], "{d}", .{child_process.extra_streams.?[0].child.out.?.handle});
     std.debug.print("s_chpipe_h: {s}\n", .{s_chpipe_h});
+    std.debug.print("typeof s_chpipe_h: {s}\n", .{@TypeOf(s_chpipe_h)});
+    const args = [_][]const u8{ child_path, s_chpipe_h };
+    child_process.argv = &args;
 
-    child_process.argv = &[_][]const u8{ testing.zig_exe_path, "--help" };
+    // TODO make this more convenient/less annoying
+    try child_process.extra_streams.?[0].parent.in.?.writer().writeAll("test123");
+    //child_process.argv = &[_][]const u8{ testing.zig_exe_path, "--help" };
     //child_process.stdout_behavior = .Ignore;
-    // TODO helper method to make this more convenient/less annoying.
 
+    std.debug.print("parent: here1\n", .{});
     const ret_val = try child_process.spawnAndWait();
+    std.debug.print("parent: here2\n", .{});
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
-    // TODO get returned values
 }
