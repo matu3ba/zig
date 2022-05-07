@@ -158,58 +158,27 @@ pub const ChildProcess = struct {
         };
     }
 
+    const ExtraPipesError = error{OutOfMemory} ||
+        os.PipeError;
+
     /// Check pipe direction tags, open pipe and assign it to file handles
     /// Check for tags is repeated at beginning of spawn() in Debug mode
-    pub fn initExtraStreams(self: *ChildProcess) os.PipeError!void {
-        // tags ensure that user does not use the wrong pipe end
-        var tmp_pipe: [2]os.fd_t = undefined;
-        if (self.extra_streams) |extra_streams| {
+    pub fn extraPipes(self: *ChildProcess, alloc: mem.Allocator) ExtraPipesError![][2]os.fd_t {
+        var tmp_pipes = try alloc.alloc([2]os.fd_t, self.extra_streams.?.len);
+        if (self.extra_streams) |extra_streams| { // TODO remove
             for (extra_streams) |*extra, i| {
                 const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
                 std.debug.assert(unidirect);
-                tmp_pipe = os.pipe() catch |err| {
-                    for (extra_streams[0..i]) |*err_extra| {
-                        switch (err_extra.parent) {
-                            .out, .in => |*opt_file| {
-                                std.debug.assert(opt_file.* != null);
-                                os.close(opt_file.*.?.handle);
-                                opt_file.* = null;
-                            },
-                        }
-                        switch (err_extra.child) {
-                            .out, .in => |*opt_file| {
-                                std.debug.assert(opt_file.* != null);
-                                os.close(opt_file.*.?.handle);
-                                opt_file.* = null;
-                            },
-                        }
+                tmp_pipes[i] = os.pipe() catch |err| {
+                    for (extra_streams[0..i]) |_| {
+                        os.close(tmp_pipes[i][0]);
+                        os.close(tmp_pipes[i][1]);
                     }
                     return err;
                 };
-
-                switch (extra.parent) {
-                    .in => |*opt_file| {
-                        std.debug.assert(opt_file.* == null);
-                        opt_file.* = File{ .handle = tmp_pipe[1] };
-                    },
-                    .out => |*opt_file| {
-                        std.debug.assert(opt_file.* == null);
-                        opt_file.* = File{ .handle = tmp_pipe[0] };
-                    },
-                }
-
-                switch (extra.child) {
-                    .in => |*opt_file| {
-                        std.debug.assert(opt_file.* == null);
-                        opt_file.* = File{ .handle = tmp_pipe[1] };
-                    },
-                    .out => |*opt_file| {
-                        std.debug.assert(opt_file.* == null);
-                        opt_file.* = File{ .handle = tmp_pipe[0] };
-                    },
-                }
             }
         }
+        return tmp_pipes;
     }
 
     pub fn setUserName(self: *ChildProcess, name: []const u8) !void {
@@ -844,19 +813,19 @@ pub const ChildProcess = struct {
 
                     switch (extra.parent) {
                         .in => |opt_file| {
-                            std.debug.assert(opt_file != null);
+                            std.debug.assert(opt_file == null);
                         },
                         .out => |opt_file| {
-                            std.debug.assert(opt_file != null);
+                            std.debug.assert(opt_file == null);
                         },
                     }
 
                     switch (extra.child) {
                         .in => |opt_file| {
-                            std.debug.assert(opt_file != null);
+                            std.debug.assert(opt_file == null);
                         },
                         .out => |opt_file| {
-                            std.debug.assert(opt_file != null);
+                            std.debug.assert(opt_file == null);
                         },
                     }
                 }
@@ -909,6 +878,14 @@ pub const ChildProcess = struct {
         };
         errdefer destroyPipe(err_pipe);
 
+        var extra_pipes = impl: {
+            if (self.extra_streams != null) {
+                break :impl try self.extraPipes(arena); // error: pipe cleanup in function
+            } else {
+                break :impl undefined;
+            }
+        };
+
         const pid_result = try os.fork();
         if (pid_result == 0) {
             // we are the child
@@ -927,6 +904,28 @@ pub const ChildProcess = struct {
             if (self.stderr_behavior == .Pipe) {
                 os.close(stderr_pipe[0]);
                 os.close(stderr_pipe[1]);
+            }
+
+            if (self.extra_streams) |extra_streams| {
+                for (extra_streams) |*extra, i| {
+                    const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                    std.debug.assert(unidirect);
+
+                    switch (extra.child) {
+                        .in => |*opt_file| {
+                            std.debug.assert(opt_file.* == null);
+                            opt_file.* = File{ .handle = extra_pipes[i][1] };
+                            os.close(extra_pipes[i][0]);
+                            std.debug.assert(opt_file.* != null);
+                        },
+                        .out => |*opt_file| {
+                            std.debug.assert(opt_file.* == null);
+                            opt_file.* = File{ .handle = extra_pipes[i][0] };
+                            os.close(extra_pipes[i][1]);
+                            std.debug.assert(opt_file.* != null);
+                        },
+                    }
+                }
             }
 
             if (self.cwd_dir) |cwd| {
@@ -980,6 +979,35 @@ pub const ChildProcess = struct {
         }
         if (self.stderr_behavior == StdIo.Pipe) {
             os.close(stderr_pipe[1]);
+        }
+
+        if (self.extra_streams) |extra_streams| {
+            for (extra_streams) |*extra, i| {
+                const unidirect = std.meta.activeTag(extra.parent) != std.meta.activeTag(extra.child);
+                std.debug.assert(unidirect);
+
+                switch (extra.parent) {
+                    .in => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        extra.child.out = File{ .handle = extra_pipes[i][0] };
+                        opt_file.* = File{ .handle = extra_pipes[i][1] };
+                        std.debug.print("fd_read_end: {d}\n", .{extra_pipes[i][0]});
+                        os.close(extra_pipes[i][0]);
+                        std.debug.print("fd_read_end: {d}\n", .{extra_pipes[i][0]});
+                        std.debug.assert(opt_file.* != null);
+                    },
+                    .out => |*opt_file| {
+                        std.debug.assert(opt_file.* == null);
+                        opt_file.* = File{ .handle = extra_pipes[i][0] };
+                        extra.child.out = File{ .handle = extra_pipes[i][1] };
+                        std.debug.print("fd_read_end: {d}\n", .{extra_pipes[i][1]});
+                        os.close(extra_pipes[i][1]);
+                        std.debug.print("fd_read_end: {d}\n", .{extra_pipes[i][1]});
+                        std.debug.assert(opt_file.* != null);
+                    },
+                }
+            }
+            std.debug.print("file handle child: {d}\n", .{self.extra_streams.?[0].child.out});
         }
     }
 
@@ -1643,9 +1671,8 @@ test "ChildProcess with extra streams" {
         .{ .parent = .{ .in = null }, .child = .{ .out = null } },
     };
     child_process.extra_streams = &extra_streams;
-    try child_process.initExtraStreams();
-    defer child_process.deinitExtraStreams();
-    // TODO make this less ugly
+
+    // fails, because we can not feed child with arguments before start.
     std.debug.print("child_process.extra_streams.?[0].child.out: {d}\n", .{child_process.extra_streams.?[0].child.out.?.handle});
     const s_chpipe_h = try std.fmt.bufPrint(buf[0..], "{d}", .{child_process.extra_streams.?[0].child.out.?.handle});
     std.debug.print("s_chpipe_h: {s}\n", .{s_chpipe_h});
@@ -1659,7 +1686,10 @@ test "ChildProcess with extra streams" {
     //child_process.stdout_behavior = .Ignore;
 
     std.debug.print("parent: here1\n", .{});
-    const ret_val = try child_process.spawnAndWait();
+    try child_process.spawn();
+    // read file descriptors
+
+    const ret_val = try child_process.wait();
     std.debug.print("parent: here2\n", .{});
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
 
@@ -1678,7 +1708,7 @@ test "ChildProcess with extra streams" {
     // child handles pipe() and close()
     // => more brittle (user must do this, because we dont the control child's stack)
     // option 1.2
-    // parent handles pipe() and close() => unclear if it works
+    // parent handles pipe() and close() => does not work, because the child must inherit the pipe
     // option 2
     // keep it as now and use something to distinguish different messages
     // => extremely brittle (simple to deadlock/wait forever on content)
