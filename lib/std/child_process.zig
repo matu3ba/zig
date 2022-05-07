@@ -1662,4 +1662,24 @@ test "ChildProcess with extra streams" {
     const ret_val = try child_process.spawnAndWait();
     std.debug.print("parent: here2\n", .{});
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
+
+    // TODO
+    // current status:
+    // stderr = child.stderr.?.reader().readAllAlloc(self.builder.allocator, max_stdout_size) catch unreachable;
+    // blocks forever, because there "might be more content"
+    // option 1
+    // child never finishes, because process is waiting on itself for finishing writing
+    // https://unix.stackexchange.com/questions/693780/closing-different-ends-in-a-pipe
+    // child process:
+    // 1. dup2() 2. close() unused end, 3. exec, 4. close() other end
+    // parent process
+    // 1. pipe() 2. close() unused end, 3. wait(), 4. close() other end
+    // option 1.1
+    // child handles pipe() and close()
+    // => more brittle (user must do this, because we dont the control child's stack)
+    // option 1.2
+    // parent handles pipe() and close() => unclear if it works
+    // option 2
+    // keep it as now and use something to distinguish different messages
+    // => extremely brittle (simple to deadlock/wait forever on content)
 }
