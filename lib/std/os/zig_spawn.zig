@@ -332,6 +332,7 @@ pub const zig_spawn = struct {
 
         const flags: u32 = system.CLONE.VM | system.CLONE.VFORK | system.SIG.CHLD;
         // Linux for now: TODO catch errors
+        // TODO port system specific clone() from musl
         pid = system.clone(child(), @ptrToInt(stack.ptr) + @sizeOf(stack), flags, &args);
         // close(args.p[1]);
         // UNLOCK(__abort_lock);
