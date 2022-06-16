@@ -904,9 +904,9 @@ pub const DeclGen = struct {
         } else {
             try w.writeAll("void");
         }
-        try w.writeAll(" ");
+        try w.writeByte(' ');
         try dg.renderDeclName(w, dg.decl_index);
-        try w.writeAll("(");
+        try w.writeByte('(');
 
         var params_written: usize = 0;
         for (fn_info.param_types) |param_type, index| {
@@ -1575,6 +1575,10 @@ pub fn genFunc(f: *Function) !void {
     const tracy = trace(@src());
     defer tracy.end();
 
+    const global = struct {
+        var signature: u32 = 1;
+        var impl: u32 = 1;
+    };
     const o = &f.object;
 
     o.code_header = std.ArrayList(u8).init(f.object.dg.gpa);
@@ -1582,13 +1586,23 @@ pub fn genFunc(f: *Function) !void {
 
     const is_global = o.dg.module.decl_exports.contains(f.func.owner_decl);
     const fwd_decl_writer = o.dg.fwd_decl.writer();
+    try fwd_decl_writer.print("----{d}", .{global.signature}); // DEBUG
+    global.signature += 1; // DEBUG
     if (is_global) {
         try fwd_decl_writer.writeAll("ZIG_EXTERN_C ");
     }
+    try fwd_decl_writer.writeAll(", 1. signature renderFunctionSignature("); // DEBUG
+    try o.dg.renderDeclName(fwd_decl_writer, o.dg.decl_index); // DEBUG
+    try fwd_decl_writer.writeAll(")----\n"); // DEBUG
     try o.dg.renderFunctionSignature(fwd_decl_writer, is_global);
     try fwd_decl_writer.writeAll(";\n");
 
     try o.indent_writer.insertNewline();
+    try o.writer().print("----{d}", .{global.impl}); // DEBUG
+    global.impl += 1; // DEBUG
+    try o.writer().writeAll(", 2. impl renderFunctionSignature("); // DEBUG
+    try o.dg.renderDeclName(o.writer(), o.dg.decl_index); // DEBUG
+    try o.writer().writeAll(")----\n"); // DEBUG
     try o.dg.renderFunctionSignature(o.writer(), is_global);
     try o.writer().writeByte(' ');
 
@@ -1601,6 +1615,7 @@ pub fn genFunc(f: *Function) !void {
 
     const main_body = f.air.getMainBody();
     try genBody(f, main_body);
+    try o.writer().writeAll("\n----body_end----\n"); // DEBUG
 
     try o.indent_writer.insertNewline();
 
@@ -1622,6 +1637,7 @@ pub fn genDecl(o: *Object) !void {
     };
     if (tv.val.tag() == .extern_fn) {
         const writer = o.writer();
+        try writer.writeAll("TODO(genDecl): link to correct file\n");
         try writer.writeAll("ZIG_EXTERN_C ");
         try o.dg.renderFunctionSignature(writer, true);
         try writer.writeAll(";\n");
@@ -1683,11 +1699,11 @@ pub fn genHeader(dg: *DeclGen) error{ AnalysisFail, OutOfMemory }!void {
         .val = dg.decl.val,
     };
     const writer = dg.fwd_decl.writer();
-
     switch (tv.ty.zigTypeTag()) {
         .Fn => {
             const is_global = dg.declIsGlobal(tv);
             if (is_global) {
+                try writer.writeAll("TODO(genHeader): link to correct file\n");
                 try writer.writeAll("ZIG_EXTERN_C ");
                 try dg.renderFunctionSignature(writer, is_global);
                 try dg.fwd_decl.appendSlice(";\n");
