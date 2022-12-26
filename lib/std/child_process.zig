@@ -32,7 +32,8 @@ pub const ChildProcess = struct {
     /// * unidirectional input xor output pipe for portability.
     /// If non-null (= used)
     /// * user must provide function to tell child process file handle
-    /// (stdin of child process [must be in pipe mode] or environment variables)
+    ///   - This means to use stdin of child process in pipe mode,
+    ///     environment variables or parse stdin of the child process.
     /// * user must process pipe handle in the child process
     ///   - attach the handle ie via `var file = File{.handle=handle};`
     ///     after parsing the integer.
@@ -174,7 +175,8 @@ pub const ChildProcess = struct {
 
     pub const SpawnOptions = struct {
         /// Use this field to execute custom code in parent process before the clone call.
-        /// For example, the child process must be told about non-standard pipes this way.
+        /// For example, the child process can be told about non-standard pipes this way.
+        /// Alternatively, the child process must parse its stdin to retrieve the info.
         /// See field of ChildProcess 'extra_streams' for more information.
         pipe_info_fn: ExPipeInfoProto = null,
     };
@@ -729,8 +731,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            std.debug.assert(opts.pipe_info_fn != null);
-            try opts.pipe_info_fn.?(self);
+            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
+            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
         }
 
         const pid = try os.posix_spawn.spawnp(self.argv[0], actions, attr, argv_buf, envp);
@@ -897,8 +899,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            std.debug.assert(opts.pipe_info_fn != null);
-            try opts.pipe_info_fn.?(self);
+            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
+            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
         }
 
         // This pipe is used to communicate errors between the time of fork
@@ -1247,8 +1249,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            std.debug.assert(opts.pipe_info_fn != null);
-            try opts.pipe_info_fn.?(self);
+            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
+            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
         }
 
         exec: {
