@@ -84,21 +84,33 @@ pub fn main() !void {
     }
     {
         // 2. setup extra pipe with parsing stdin
+        // This requires to manually use the helper funcitons in both parent and child.
+        // Note, that we dont assign any data to the child process, as this would
+        // trigger creation + closing of pipes and the function execution.
         const child_stdin_path = it.next() orelse unreachable; // child_stdin.zig
-        _ = child_stdin_path;
-        // TODO -- setup pipe --
-        // var child_process = ChildProcess.init(
-        //     &.{child_stdin_path},
-        //     gpa,
-        // );
-        // var extra_streams = [_]ChildProcess.ExtraStream{
-        //     .{
-        //         .direction = .parent_to_child,
-        //         .input = null,
-        //         .output = null,
-        //     },
-        // };
-        // child_process.extra_streams = &extra_streams;
+        // -- setup pipe --
+
+        var extra_streams = [_]ChildProcess.ExtraStream{
+            .{
+                .direction = .parent_to_child,
+                .input = null,
+                .output = null,
+            },
+        };
+        try ChildProcess.initExtraStreams(&extra_streams);
+        // TODO method for manually closing accoridng to extra_streams
+        // TODO make inline cross-platform method to spawn pipes.
+        // assignment extra_streams => creation + closing
+        // no assignment to extra_streams => no creation + closing
+
+        var child_process = ChildProcess.init(
+            &.{child_stdin_path},
+            gpa,
+        );
+        _ = child_process;
+        // _ = extra_streams;
+        // dont assign `child_process.extra_streams = &extra_streams;`, do steps manually.
+        //child_process.extra_streams = &extra_streams;
         // try child_process.spawn(.{});
         // // TODO -- close pipe end --
         // try std.testing.expect(child_process.extra_streams.?[0].input == null);

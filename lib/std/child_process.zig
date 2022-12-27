@@ -161,6 +161,69 @@ pub const ChildProcess = struct {
         };
     }
 
+    /// Returns cross-platofrm initialized pipe streams.
+    /// This method is to manually control extra pipes and should be used with
+    /// TODO.
+    /// This method must not be used, if field extra_streams of ChildProcess
+    /// and the corresponding setup function pipe_info_fn are used.
+    // TODO change to `pub inline fn` once https://github.com/ziglang/zig/issues/12806 is resolved.
+    pub fn initExtraStreams(extra_streams: ?[]ExtraStream) !void {
+        if (builtin.os.tag == .windows) {
+            std.debug.assert(false);
+            if (extra_streams) |extra_streams_unwrap| {
+                const saAttr = windows.SECURITY_ATTRIBUTES{
+                    .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
+                    .bInheritHandle = windows.TRUE,
+                    .lpSecurityDescriptor = null,
+                };
+                for (extra_streams_unwrap) |*extra, i| {
+                    std.debug.assert(extra.input == null);
+                    std.debug.assert(extra.output == null);
+
+                    var g_hChildExtra_Stream_Rd: ?windows.HANDLE = null;
+                    var g_hChildExtra_Stream_Wr: ?windows.HANDLE = null;
+                    windowsMakeAsyncPipe(
+                        &g_hChildExtra_Stream_Rd,
+                        &g_hChildExtra_Stream_Wr,
+                        &saAttr,
+                        extra.direction,
+                    ) catch |err| {
+                        for (extra_streams_unwrap[0..i]) |*extra_fail| {
+                            extra_fail.input.?.close();
+                            extra_fail.output.?.close();
+                            extra_fail.input = null;
+                            extra_fail.output = null;
+                        }
+                        return err;
+                    };
+                    extra.input = File{ .handle = g_hChildExtra_Stream_Rd.? };
+                    extra.output = File{ .handle = g_hChildExtra_Stream_Wr.? };
+                }
+            }
+        } else {
+            std.debug.assert(true);
+            if (extra_streams) |extra_streams_unwrap| {
+                for (extra_streams_unwrap) |*extra, i| {
+                    std.debug.assert(extra.input == null);
+                    std.debug.assert(extra.output == null);
+
+                    const tmp_pipe = os.pipe() catch |err| {
+                        for (extra_streams_unwrap[0..i]) |*extra_fail| {
+                            extra_fail.input.?.close();
+                            extra_fail.output.?.close();
+                            extra_fail.input = null;
+                            extra_fail.output = null;
+                        }
+                        return err;
+                    };
+
+                    extra.input = File{ .handle = tmp_pipe[0] };
+                    extra.output = File{ .handle = tmp_pipe[1] };
+                }
+            }
+        }
+    }
+
     pub fn setUserName(self: *ChildProcess, name: []const u8) !void {
         const user_info = try std.process.getUserInfo(name);
         self.uid = user_info.uid;
@@ -663,25 +726,7 @@ pub const ChildProcess = struct {
             undefined;
         defer if (any_ignore) os.close(dev_null_fd);
 
-        if (self.extra_streams) |extra_streams| {
-            for (extra_streams) |*extra, i| {
-                std.debug.assert(extra.input == null);
-                std.debug.assert(extra.output == null);
-
-                const tmp_pipe = os.pipe() catch |err| {
-                    for (extra_streams[0..i]) |*extra_fail| {
-                        extra_fail.input.?.close();
-                        extra_fail.output.?.close();
-                        extra_fail.input = null;
-                        extra_fail.output = null;
-                    }
-                    return err;
-                };
-
-                extra.input = File{ .handle = tmp_pipe[0] };
-                extra.output = File{ .handle = tmp_pipe[1] };
-            }
-        }
+        try initExtraStreams(self.extra_streams);
 
         var attr = try os.posix_spawn.Attr.init();
         defer attr.deinit();
@@ -731,8 +776,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
-            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
+            std.debug.assert(opts.pipe_info_fn != null);
+            try opts.pipe_info_fn.?(self);
         }
 
         const pid = try os.posix_spawn.spawnp(self.argv[0], actions, attr, argv_buf, envp);
@@ -844,25 +889,7 @@ pub const ChildProcess = struct {
             if (any_ignore) os.close(dev_null_fd);
         }
 
-        if (self.extra_streams) |extra_streams| {
-            for (extra_streams) |*extra, i| {
-                std.debug.assert(extra.input == null);
-                std.debug.assert(extra.output == null);
-
-                const tmp_pipe = os.pipe() catch |err| {
-                    for (extra_streams[0..i]) |*extra_fail| {
-                        extra_fail.input.?.close();
-                        extra_fail.output.?.close();
-                        extra_fail.input = null;
-                        extra_fail.output = null;
-                    }
-                    return err;
-                };
-
-                extra.input = File{ .handle = tmp_pipe[0] };
-                extra.output = File{ .handle = tmp_pipe[1] };
-            }
-        }
+        try initExtraStreams(self.extra_streams);
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
         defer arena_allocator.deinit();
@@ -899,8 +926,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
-            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
+            std.debug.assert(opts.pipe_info_fn != null);
+            try opts.pipe_info_fn.?(self);
         }
 
         // This pipe is used to communicate errors between the time of fork
@@ -1143,31 +1170,7 @@ pub const ChildProcess = struct {
             self.stderr = null;
         }
 
-        if (self.extra_streams) |extra_streams| {
-            for (extra_streams) |*extra, i| {
-                std.debug.assert(extra.input == null);
-                std.debug.assert(extra.output == null);
-
-                var g_hChildExtra_Stream_Rd: ?windows.HANDLE = null;
-                var g_hChildExtra_Stream_Wr: ?windows.HANDLE = null;
-                windowsMakeAsyncPipe(
-                    &g_hChildExtra_Stream_Rd,
-                    &g_hChildExtra_Stream_Wr,
-                    &saAttr,
-                    extra.direction,
-                ) catch |err| {
-                    for (extra_streams[0..i]) |*extra_fail| {
-                        extra_fail.input.?.close();
-                        extra_fail.output.?.close();
-                        extra_fail.input = null;
-                        extra_fail.output = null;
-                    }
-                    return err;
-                };
-                extra.input = File{ .handle = g_hChildExtra_Stream_Rd.? };
-                extra.output = File{ .handle = g_hChildExtra_Stream_Wr.? };
-            }
-        }
+        try initExtraStreams(self.extra_streams);
 
         const cmd_line = try windowsCreateCommandLine(self.allocator, self.argv);
         defer self.allocator.free(cmd_line);
@@ -1249,8 +1252,8 @@ pub const ChildProcess = struct {
         // user must communicate extra pipes to child process either via
         // environment variables or stdin
         if (self.extra_streams != null) {
-            // std.debug.assert(opts.pipe_info_fn != null); // DEBUG
-            if (opts.pipe_info_fn != null) try opts.pipe_info_fn.?(self);
+            std.debug.assert(opts.pipe_info_fn != null);
+            try opts.pipe_info_fn.?(self);
         }
 
         exec: {
