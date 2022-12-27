@@ -169,7 +169,6 @@ pub const ChildProcess = struct {
     // TODO change to `pub inline fn` once https://github.com/ziglang/zig/issues/12806 is resolved.
     pub fn initExtraStreams(extra_streams: ?[]ExtraStream) !void {
         if (builtin.os.tag == .windows) {
-            std.debug.assert(false);
             if (extra_streams) |extra_streams_unwrap| {
                 const saAttr = windows.SECURITY_ATTRIBUTES{
                     .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
@@ -201,7 +200,6 @@ pub const ChildProcess = struct {
                 }
             }
         } else {
-            std.debug.assert(true);
             if (extra_streams) |extra_streams_unwrap| {
                 for (extra_streams_unwrap) |*extra, i| {
                     std.debug.assert(extra.input == null);
@@ -224,16 +222,52 @@ pub const ChildProcess = struct {
         }
     }
 
+    // TODO: problem is that closeExtraStreamsParent is declarative, which
+    // is unneccessary on non-Darwin
+    // pub fn prepareExtraStreamsParent(extra_streams: ?[]ExtraStream) !void {
+    //     // darwin (defaults to posix spawn):
+    //     // if (self.extra_streams) |extra_streams| {
+    //     //     for (extra_streams) |*extra| {
+    //     //         switch (extra.direction) {
+    //     //             .parent_to_child => try actions.close(extra.output.?.handle),
+    //     //             .child_to_parent => try actions.close(extra.input.?.handle),
+    //     //         }
+    //     //     }
+    //     // }
+    //     // windows:
+    //     // empty impl
+    //     // linux:
+    //     // empty
+    // }
+    //
+    // // TODO: imperative leak prevention
+    // pub fn preventLeakExtraStreamsParent(extra_streams: ?[]ExtraStream) !void {
+    //     // darwin (defaults to posix spawn):
+    //     // if (self.extra_streams) |extra_streams| {
+    //     //     for (extra_streams) |*extra| {
+    //     //         switch (extra.direction) {
+    //     //             .parent_to_child => try actions.close(extra.output.?.handle),
+    //     //             .child_to_parent => try actions.close(extra.input.?.handle),
+    //     //         }
+    //     //     }
+    //     // }
+    //     // windows:
+    //     // empty impl
+    //     // linux:
+    //     // empty
+    // }
+
     pub fn setUserName(self: *ChildProcess, name: []const u8) !void {
         const user_info = try std.process.getUserInfo(name);
         self.uid = user_info.uid;
         self.gid = user_info.gid;
     }
 
-    const ExPipeInfoProto = switch (builtin.zig_backend) {
-        // workaround until we replace stage1 with stage2
-        .stage1 => ?fn (self: *ChildProcess) ChildProcess.SpawnError!void,
-        else => ?*const fn (self: *ChildProcess) ChildProcess.SpawnError!void,
+    const ExPipeInfoProto = impl: {
+        if (builtin.target.isDarwin()) {
+            break :impl ?*const fn (self: *ChildProcess, actions: *os.posix_spawn.Actions) ChildProcess.SpawnError!void;
+        }
+        break :impl ?*const fn (self: *ChildProcess) ChildProcess.SpawnError!void;
     };
 
     pub const SpawnOptions = struct {
