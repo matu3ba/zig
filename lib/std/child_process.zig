@@ -57,6 +57,12 @@ pub const ChildProcess = struct {
 
     expand_arg0: Arg0Expand,
 
+    /// Use this for additional posix spawn attributes.
+    /// Do not set spawn attribute flags and do not modify stdin, stdout, stderr
+    /// behavior, because those are set in the platform-specific spawn method.
+    posix_attr: if (builtin.target.isDarwin()) ?os.posix_spawn.Attr else void,
+    posix_action: if (builtin.target.isDarwin()) ?os.posix_spawn.Actions else void,
+
     /// Darwin-only. Disable ASLR for the child process.
     disable_aslr: bool = false,
 
@@ -100,6 +106,16 @@ pub const ChildProcess = struct {
         Close,
     };
 
+    pub const PipeDirection = enum {
+        parent_to_child,
+        child_to_parent,
+    };
+
+    pub const PosixData = union(enum) {
+        Attribute: os.posix_spawn.Attr,
+        Actions: os.posix_spawn.Actions,
+    };
+
     /// First argument in argv is the executable.
     pub fn init(argv: []const []const u8, allocator: mem.Allocator) ChildProcess {
         return .{
@@ -121,6 +137,8 @@ pub const ChildProcess = struct {
             .stdout_behavior = StdIo.Inherit,
             .stderr_behavior = StdIo.Inherit,
             .expand_arg0 = .no_expand,
+            .posix_attr = if (comptime builtin.target.isDarwin()) null else undefined,
+            .posix_action = if (comptime builtin.target.isDarwin()) null else undefined,
         };
     }
 
@@ -548,6 +566,10 @@ pub const ChildProcess = struct {
     }
 
     fn spawnMacos(self: *ChildProcess) SpawnError!void {
+        // cleanup user-initialization and initialization in this function
+        defer if (self.posix_attr != null) self.posix_attr.?.deinit();
+        defer if (self.posix_actions != null) self.posix_actions.?.deinit();
+
         const pipe_flags = if (io.is_async) os.O.NONBLOCK else 0;
         const stdin_pipe = if (self.stdin_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
         errdefer if (self.stdin_behavior == StdIo.Pipe) destroyPipe(stdin_pipe);
@@ -575,8 +597,8 @@ pub const ChildProcess = struct {
             undefined;
         defer if (any_ignore) os.close(dev_null_fd);
 
-        var attr = try os.posix_spawn.Attr.init();
-        defer attr.deinit();
+        if (self.posix_attr == null)
+            self.posix_attr = try os.posix_spawn.Attr.init();
         var flags: u16 = os.darwin.POSIX_SPAWN_SETSIGDEF | os.darwin.POSIX_SPAWN_SETSIGMASK;
         if (self.disable_aslr) {
             flags |= os.darwin._POSIX_SPAWN_DISABLE_ASLR;
@@ -584,19 +606,19 @@ pub const ChildProcess = struct {
         if (self.start_suspended) {
             flags |= os.darwin.POSIX_SPAWN_START_SUSPENDED;
         }
-        try attr.set(flags);
+        try self.posix_attr.?.set(flags);
 
-        var actions = try os.posix_spawn.Actions.init();
-        defer actions.deinit();
+        if (self.posix_actions == null)
+            self.posix_actions = try os.posix_spawn.Actions.init();
 
-        try setUpChildIoPosixSpawn(self.stdin_behavior, &actions, stdin_pipe, os.STDIN_FILENO, dev_null_fd);
-        try setUpChildIoPosixSpawn(self.stdout_behavior, &actions, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
-        try setUpChildIoPosixSpawn(self.stderr_behavior, &actions, stderr_pipe, os.STDERR_FILENO, dev_null_fd);
+        try setUpChildIoPosixSpawn(self.stdin_behavior, &self.posix_actions.?, stdin_pipe, os.STDIN_FILENO, dev_null_fd);
+        try setUpChildIoPosixSpawn(self.stdout_behavior, &self.posix_actions.?, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
+        try setUpChildIoPosixSpawn(self.stderr_behavior, &self.posix_actions.?, stderr_pipe, os.STDERR_FILENO, dev_null_fd);
 
         if (self.cwd_dir) |cwd| {
-            try actions.fchdir(cwd.fd);
+            try self.posix_actions.?.fchdir(cwd.fd);
         } else if (self.cwd) |cwd| {
-            try actions.chdir(cwd);
+            try self.posix_actions.?.chdir(cwd);
         }
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
@@ -611,7 +633,7 @@ pub const ChildProcess = struct {
             break :m envp_buf.ptr;
         } else std.c.environ;
 
-        const pid = try os.posix_spawn.spawnp(self.argv[0], actions, attr, argv_buf, envp);
+        const pid = try os.posix_spawn.spawnp(self.argv[0], self.posix_actions.?, self.posix_attr.?, argv_buf, envp);
 
         if (self.stdin_behavior == StdIo.Pipe) {
             self.stdin = File{ .handle = stdin_pipe[1] };
@@ -876,7 +898,12 @@ pub const ChildProcess = struct {
         var g_hChildStd_OUT_Wr: ?windows.HANDLE = null;
         switch (self.stdout_behavior) {
             StdIo.Pipe => {
-                try windowsMakeAsyncPipe(&g_hChildStd_OUT_Rd, &g_hChildStd_OUT_Wr, &saAttr);
+                try windowsMakeAsyncPipe(
+                    &g_hChildStd_OUT_Rd,
+                    &g_hChildStd_OUT_Wr,
+                    &saAttr,
+                    PipeDirection.child_to_parent,
+                );
             },
             StdIo.Ignore => {
                 g_hChildStd_OUT_Wr = nul_handle;
@@ -896,7 +923,12 @@ pub const ChildProcess = struct {
         var g_hChildStd_ERR_Wr: ?windows.HANDLE = null;
         switch (self.stderr_behavior) {
             StdIo.Pipe => {
-                try windowsMakeAsyncPipe(&g_hChildStd_ERR_Rd, &g_hChildStd_ERR_Wr, &saAttr);
+                try windowsMakeAsyncPipe(
+                    &g_hChildStd_ERR_Rd,
+                    &g_hChildStd_ERR_Wr,
+                    &saAttr,
+                    PipeDirection.child_to_parent,
+                );
             },
             StdIo.Ignore => {
                 g_hChildStd_ERR_Wr = nul_handle;
@@ -1324,23 +1356,18 @@ fn windowsCreateProcessPathExt(
 }
 
 fn windowsCreateProcess(app_name: [*:0]u16, cmd_line: [*:0]u16, envp_ptr: ?[*]u16, cwd_ptr: ?[*:0]u16, lpStartupInfo: *windows.STARTUPINFOW, lpProcessInformation: *windows.PROCESS_INFORMATION) !void {
-    // TODO the docs for environment pointer say:
-    // > A pointer to the environment block for the new process. If this parameter
-    // > is NULL, the new process uses the environment of the calling process.
-    // > ...
-    // > An environment block can contain either Unicode or ANSI characters. If
-    // > the environment block pointed to by lpEnvironment contains Unicode
-    // > characters, be sure that dwCreationFlags includes CREATE_UNICODE_ENVIRONMENT.
-    // > If this parameter is NULL and the environment block of the parent process
-    // > contains Unicode characters, you must also ensure that dwCreationFlags
-    // > includes CREATE_UNICODE_ENVIRONMENT.
-    // This seems to imply that we have to somehow know whether our process parent passed
-    // CREATE_UNICODE_ENVIRONMENT if we want to pass NULL for the environment parameter.
-    // Since we do not know this information that would imply that we must not pass NULL
-    // for the parameter.
-    // However this would imply that programs compiled with -DUNICODE could not pass
-    // environment variables to programs that were not, which seems unlikely.
-    // More investigation is needed.
+    // See https://stackoverflow.com/a/4207169/9306292
+    // One can manually write in unicode even if one doesn't compile in unicode
+    // (-DUNICODE).
+    // Thus CREATE_UNICODE_ENVIRONMENT, according to how one constructed the
+    // environment block, is necessary, since CreateProcessA and CreateProcessW may
+    // work with either Ansi or Unicode.
+    // * The environment variables can still be inherited from parent process,
+    //   if set to NULL
+    // * The OS can for an unspecified environment block not figure out,
+    //   if it is Unicode or ANSI.
+    // * Applications may break without specification of the environment variable
+    //   due to inability of Windows to check (+translate) the character encodings.
     return windows.CreateProcessW(
         app_name,
         cmd_line,
@@ -1471,7 +1498,16 @@ fn windowsMakePipeIn(rd: *?windows.HANDLE, wr: *?windows.HANDLE, sattr: *const w
 
 var pipe_name_counter = std.atomic.Atomic(u32).init(1);
 
-fn windowsMakeAsyncPipe(rd: *?windows.HANDLE, wr: *?windows.HANDLE, sattr: *const windows.SECURITY_ATTRIBUTES) !void {
+/// Create asynchronous pipe.
+/// To enable inheritance between parent and child process, set bInheritHandle = windows.TRUE
+/// in the security attributes.
+/// Direction defines which handle is updated (to enable inheritance by ChildProcess)
+pub fn windowsMakeAsyncPipe(
+    rd: *?windows.HANDLE,
+    wr: *?windows.HANDLE,
+    sattr: *const windows.SECURITY_ATTRIBUTES,
+    direction: ChildProcess.PipeDirection,
+) !void {
     var tmp_bufw: [128]u16 = undefined;
 
     // Anonymous pipes are built upon Named pipes.
@@ -1526,8 +1562,10 @@ fn windowsMakeAsyncPipe(rd: *?windows.HANDLE, wr: *?windows.HANDLE, sattr: *cons
     }
     errdefer os.close(write_handle);
 
-    try windows.SetHandleInformation(read_handle, windows.HANDLE_FLAG_INHERIT, 0);
-
+    switch (direction) {
+        .child_to_parent => try windows.SetHandleInformation(read_handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT),
+        .parent_to_child => try windows.SetHandleInformation(write_handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT),
+    }
     rd.* = read_handle;
     wr.* = write_handle;
 }
