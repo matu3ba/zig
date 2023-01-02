@@ -51,6 +51,7 @@ pub const bit_set = @import("bit_set.zig");
 pub const build = @import("build.zig");
 pub const builtin = @import("builtin.zig");
 pub const c = @import("c.zig");
+pub const child_process = @import("child_process.zig");
 pub const coff = @import("coff.zig");
 pub const compress = @import("compress.zig");
 pub const crypto = @import("crypto.zig");

@@ -5,6 +5,7 @@ const math = std.math;
 const windows = std.os.windows;
 const os = std.os;
 const testing = std.testing;
+const child_process = std.child_process;
 
 const windowsPtrDigits: usize = std.math.log10(math.maxInt(usize));
 const otherPtrDigits: usize = std.math.log10(math.maxInt(u32)) + 1; // +1 for sign
@@ -53,7 +54,7 @@ pub fn main() !void {
             .bInheritHandle = windows.TRUE,
             .lpSecurityDescriptor = null,
         };
-        try ChildProcess.windowsMakeAsyncPipe(
+        try child_process.windowsMakeAsyncPipe(
             &pipe[0],
             &pipe[1],
             &saAttr,
@@ -66,23 +67,23 @@ pub fn main() !void {
     // write pipe to string + add to command
     var buf: [handleCharSize]u8 = comptime [_]u8{0} ** handleCharSize;
     const s_handle = try handleToString(pipe[0], &buf); // read side of pipe
-    var child_process = ChildProcess.init(
+    var child_proc = ChildProcess.init(
         &.{ child_path, s_handle },
         gpa,
     );
     {
         if (comptime builtin.target.isDarwin()) {
             {
-                child_process.posix_actions = try os.posix_spawn.Actions.init();
+                child_proc.posix_actions = try os.posix_spawn.Actions.init();
                 errdefer os.posix_actions.Attr.deinit();
-                try child_process.posix_actions.close(pipe[0]); // close read side of pipe
+                try child_proc.posix_actions.close(pipe[0]); // close read side of pipe
             }
         }
         defer if (comptime !builtin.target.isDarwin()) {
             os.close(pipe[0]); // close read side of pipe
         };
 
-        try child_process.spawn();
+        try child_proc.spawn();
     }
 
     try std.os.disableFileInheritance(pipe[1]);
@@ -100,6 +101,6 @@ pub fn main() !void {
     defer file_out.close();
     const file_out_writer = file_out.writer();
     try file_out_writer.writeAll("test123\x17"); // ETB = \x17
-    const ret_val = try child_process.wait();
+    const ret_val = try child_proc.wait();
     try testing.expectEqual(ret_val, .{ .Exited = 0 });
 }
