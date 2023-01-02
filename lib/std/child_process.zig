@@ -61,7 +61,7 @@ pub const ChildProcess = struct {
     /// Do not set spawn attribute flags and do not modify stdin, stdout, stderr
     /// behavior, because those are set in the platform-specific spawn method.
     posix_attr: if (builtin.target.isDarwin()) ?os.posix_spawn.Attr else void,
-    posix_action: if (builtin.target.isDarwin()) ?os.posix_spawn.Actions else void,
+    posix_actions: if (builtin.target.isDarwin()) ?os.posix_spawn.Actions else void,
 
     /// Darwin-only. Disable ASLR for the child process.
     disable_aslr: bool = false,
@@ -138,7 +138,7 @@ pub const ChildProcess = struct {
             .stderr_behavior = StdIo.Inherit,
             .expand_arg0 = .no_expand,
             .posix_attr = if (comptime builtin.target.isDarwin()) null else undefined,
-            .posix_action = if (comptime builtin.target.isDarwin()) null else undefined,
+            .posix_actions = if (comptime builtin.target.isDarwin()) null else undefined,
         };
     }
 
