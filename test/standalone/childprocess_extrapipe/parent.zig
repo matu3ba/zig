@@ -47,7 +47,7 @@ pub fn main() !void {
     const child_path = it.next() orelse unreachable;
 
     // use posix convention: 0 read, 1 write
-    var pipe: if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t = undefined;
+    var pipe: if (builtin.os.tag == .windows) [2]?windows.HANDLE else [2]os.fd_t = undefined;
     if (builtin.os.tag == .windows) {
         const saAttr = windows.SECURITY_ATTRIBUTES{
             .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
@@ -72,15 +72,20 @@ pub fn main() !void {
         gpa,
     );
     {
+        // close read side of pipe
         if (comptime builtin.target.isDarwin()) {
             {
                 child_proc.posix_actions = try os.posix_spawn.Actions.init();
                 errdefer os.posix_actions.Attr.deinit();
-                try child_proc.posix_actions.close(pipe[0]); // close read side of pipe
+                try child_proc.posix_actions.close(pipe[0]);
             }
         }
         defer if (comptime !builtin.target.isDarwin()) {
-            os.close(pipe[0]); // close read side of pipe
+            if (builtin.os.tag == .windows) {
+                os.close(pipe[0].?);
+            } else {
+                os.close(pipe[0]);
+            }
         };
 
         try child_proc.spawn();
