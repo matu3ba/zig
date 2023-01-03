@@ -9,30 +9,15 @@ const child_process = std.child_process;
 
 const windowsPtrDigits: usize = std.math.log10(math.maxInt(usize));
 const otherPtrDigits: usize = std.math.log10(math.maxInt(u32)) + 1; // +1 for sign
-const handleCharSize = size: {
-    if (builtin.target.os.tag == .windows) {
-        break :size windowsPtrDigits;
-    } else {
-        break :size otherPtrDigits;
-    }
-};
+const handleCharSize = if (builtin.target.os.tag == .windows) windowsPtrDigits else otherPtrDigits;
 
 /// assert: buf can store the handle
 fn handleToString(handle: os.fd_t, buf: []u8) std.fmt.BufPrintError![]u8 {
     var s_handle: []u8 = undefined;
-    const handle_int = handle: {
-        if (builtin.target.os.tag == .windows) {
-            // handle is *anyopaque and there is no other way to cast
-            break :handle @ptrToInt(handle);
-        } else {
-            break :handle handle;
-        }
-    };
-    s_handle = try std.fmt.bufPrint(
-        buf[0..],
-        "{d}",
-        .{handle_int},
-    );
+    const handle_int =
+        // handle is *anyopaque or an integer on unix-likes Kernels.
+        if (builtin.target.os.tag == .windows) @ptrToInt(handle) else handle;
+    s_handle = try std.fmt.bufPrint(buf[0..], "{d}", .{handle_int});
     return s_handle;
 }
 
@@ -54,19 +39,20 @@ pub fn main() !void {
             .bInheritHandle = windows.TRUE,
             .lpSecurityDescriptor = null,
         };
-        try child_process.windowsMakeAsyncPipe(
-            &pipe[0],
-            &pipe[1],
-            &saAttr,
-            .parent_to_child,
-        );
+        try child_process.windowsMakeAsyncPipe(&pipe[0], &pipe[1], &saAttr, .parent_to_child);
     } else {
         pipe = try os.pipe(); // leaks on default
     }
 
     // write pipe to string + add to command
     var buf: [handleCharSize]u8 = comptime [_]u8{0} ** handleCharSize;
-    const s_handle = try handleToString(pipe[0], &buf); // read side of pipe
+
+    const s_handle =
+        if (builtin.os.tag == .windows)
+        try handleToString(pipe[0].?, &buf) // read side of pipe
+    else
+        try handleToString(pipe[0], &buf);
+
     var child_proc = ChildProcess.init(
         &.{ child_path, s_handle },
         gpa,
@@ -76,8 +62,9 @@ pub fn main() !void {
         if (comptime builtin.target.isDarwin()) {
             {
                 child_proc.posix_actions = try os.posix_spawn.Actions.init();
-                errdefer os.posix_actions.Attr.deinit();
-                try child_proc.posix_actions.close(pipe[0]);
+                errdefer child_proc.posix_actions.?.deinit();
+                try child_proc.posix_actions.?.close(pipe[0]);
+                errdefer child_proc.posix_actions.?.deinit();
             }
         }
         defer if (comptime !builtin.target.isDarwin()) {
