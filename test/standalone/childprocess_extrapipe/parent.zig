@@ -89,7 +89,7 @@ pub fn main() !void {
     if (builtin.target.os.tag == .windows) {
         var handle_flags: windows.DWORD = undefined;
         try windows.GetHandleInformation(pipe[1].?, &handle_flags);
-        std.debug.assert(handle_flags & windows.HANDLE_FLAG_INHERIT != 0);
+        std.debug.assert(handle_flags & windows.HANDLE_FLAG_INHERIT == 0);
     } else {
         const fcntl_flags = try os.fcntl(pipe[1], os.F.GETFD, 0);
         try std.testing.expect((fcntl_flags & os.FD_CLOEXEC) != 0);

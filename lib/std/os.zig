@@ -4843,9 +4843,9 @@ pub fn lseek_CUR_get(fd: fd_t) SeekError!u64 {
     }
 }
 
-const UnsetFileInheritanceError = FcntlError || windows.SetHandleInformationError;
+const DisableFileInheritanceError = FcntlError || windows.SetHandleInformationError;
 
-pub inline fn disableFileInheritance(file_handle: fd_t) UnsetFileInheritanceError!void {
+pub inline fn disableFileInheritance(file_handle: fd_t) DisableFileInheritanceError!void {
     if (builtin.os.tag == .windows) {
         try windows.SetHandleInformation(file_handle, windows.HANDLE_FLAG_INHERIT, 0);
     } else {
