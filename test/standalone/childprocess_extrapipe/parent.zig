@@ -61,9 +61,10 @@ pub fn main() !void {
         // close read side of pipe
         if (comptime builtin.target.isDarwin()) {
             {
+                // less time for leaking the file descriptor, if it is closed immediately
                 child_proc.posix_actions = try os.posix_spawn.Actions.init();
                 errdefer child_proc.posix_actions.?.deinit();
-                try child_proc.posix_actions.?.close(pipe[0]);
+                try child_proc.posix_actions.?.close(pipe[1]);
                 errdefer child_proc.posix_actions.?.deinit();
             }
         }
@@ -78,19 +79,29 @@ pub fn main() !void {
         try child_proc.spawn();
     }
 
-    try std.os.disableFileInheritance(pipe[1]);
+    if (builtin.os.tag == .windows) {
+        try std.os.disableFileInheritance(pipe[1].?);
+    } else {
+        try std.os.disableFileInheritance(pipe[1]);
+    }
+
     // check that disableFileInheritance was successful
     if (builtin.target.os.tag == .windows) {
         var handle_flags: windows.DWORD = undefined;
-        try windows.GetHandleInformation(pipe[1], &handle_flags);
+        try windows.GetHandleInformation(pipe[1].?, &handle_flags);
         std.debug.assert(handle_flags & windows.HANDLE_FLAG_INHERIT != 0);
     } else {
         const fcntl_flags = try os.fcntl(pipe[1], os.F.GETFD, 0);
         try std.testing.expect((fcntl_flags & os.FD_CLOEXEC) != 0);
     }
 
-    var file_out = std.fs.File{ .handle = pipe[1] };
-    defer file_out.close();
+    // do we want another extra prong for darwin?
+    var file_out = if (builtin.target.os.tag == .windows)
+        std.fs.File{ .handle = pipe[1].? }
+    else
+        std.fs.File{ .handle = pipe[1] };
+
+    defer if (comptime !builtin.target.isDarwin()) file_out.close();
     const file_out_writer = file_out.writer();
     try file_out_writer.writeAll("test123\x17"); // ETB = \x17
     const ret_val = try child_proc.wait();
