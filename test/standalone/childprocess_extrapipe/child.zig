@@ -19,6 +19,8 @@ pub fn main() !void {
             break :file_handle try std.fmt.parseInt(std.os.fd_t, s_handle, 10);
         }
     };
+    // TODO: Is there a way on Windows to let the Kernel disable inheritance
+    // after it is inherited in CreateProcess???
     if (builtin.target.os.tag == .windows) {
         // windows.HANDLE_FLAG_INHERIT is enabled
         var handle_flags: windows.DWORD = undefined;

@@ -44,6 +44,9 @@ pub const windows = @import("os/windows.zig");
 pub const posix_spawn = @import("os/posix_spawn.zig");
 pub const ptrace = @import("os/ptrace.zig");
 
+// TODO where should we add our own target infos for things that we have bindings for?
+pub const hasPosixSpawn = builtin.target.isDarwin();
+
 comptime {
     assert(@import("std") == std); // std lib tests require --zig-lib-dir
 }
@@ -4840,6 +4843,18 @@ pub fn lseek_CUR_get(fd: fd_t) SeekError!u64 {
         .SPIPE => return error.Unseekable,
         .NXIO => return error.Unseekable,
         else => |err| return unexpectedErrno(err),
+    }
+}
+
+const EnableFileInheritanceError = FcntlError || windows.SetHandleInformationError;
+
+pub inline fn enableFileInheritance(file_handle: fd_t) EnableFileInheritanceError!void {
+    if (builtin.os.tag == .windows) {
+        try windows.SetHandleInformation(file_handle, windows.HANDLE_FLAG_INHERIT, 1);
+    } else {
+        var flags = fcntl(file_handle, F.GETFD, 0);
+        flags &= ~@as(u32, FD_CLOEXEC);
+        _ = try fcntl(file_handle, F.SETFD, flags);
     }
 }
 

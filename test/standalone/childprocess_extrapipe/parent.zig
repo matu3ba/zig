@@ -39,17 +39,17 @@ pub fn main() !void {
             .bInheritHandle = windows.TRUE,
             .lpSecurityDescriptor = null,
         };
+        // create pipe and enable inheritance for the read end, which will be given to the child
         try child_process.windowsMakeAsyncPipe(&pipe[0], &pipe[1], &saAttr, .parent_to_child);
     } else {
-        pipe = try os.pipe(); // leaks on default
+        pipe = try os.pipe(); // leaks on default, but more portable, TODO: use pip2 and close earlier?
     }
 
-    // write pipe to string + add to command
+    // write read side of pipe to string + add to spawn command
     var buf: [handleCharSize]u8 = comptime [_]u8{0} ** handleCharSize;
-
     const s_handle =
         if (builtin.os.tag == .windows)
-        try handleToString(pipe[0].?, &buf) // read side of pipe
+        try handleToString(pipe[0].?, &buf)
     else
         try handleToString(pipe[0], &buf);
 
@@ -58,34 +58,24 @@ pub fn main() !void {
         gpa,
     );
     {
-        // close read side of pipe
-        if (comptime builtin.target.isDarwin()) {
-            {
-                // less time for leaking the file descriptor, if it is closed immediately
-                child_proc.posix_actions = try os.posix_spawn.Actions.init();
-                errdefer child_proc.posix_actions.?.deinit();
-                try child_proc.posix_actions.?.close(pipe[1]);
-                errdefer child_proc.posix_actions.?.deinit();
-            }
-        }
-        defer if (comptime !builtin.target.isDarwin()) {
-            if (builtin.os.tag == .windows) {
-                os.close(pipe[0].?);
-            } else {
-                os.close(pipe[0]);
-            }
-        };
+        // close read side of pipe, less time for leaking, if closed immediately
+        if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
+        defer if (os.hasPosixSpawn) child_proc.posix_actions.?.deinit();
+        if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[1]); // TODO: This is not closed in child
+        defer if (builtin.os.tag == .windows)
+            os.close(pipe[0].?)
+        else
+            os.close(pipe[0]);
 
         try child_proc.spawn();
     }
 
-    if (builtin.os.tag == .windows) {
-        try std.os.disableFileInheritance(pipe[1].?);
-    } else {
+    // call fcntl on Unixes to disable handle inheritance
+    if (builtin.os.tag != .windows) {
         try std.os.disableFileInheritance(pipe[1]);
     }
 
-    // check that disableFileInheritance was successful
+    // windows does have inheritance disabled on default, but we check to be sure
     if (builtin.target.os.tag == .windows) {
         var handle_flags: windows.DWORD = undefined;
         try windows.GetHandleInformation(pipe[1].?, &handle_flags);
@@ -95,13 +85,12 @@ pub fn main() !void {
         try std.testing.expect((fcntl_flags & os.FD_CLOEXEC) != 0);
     }
 
-    // do we want another extra prong for darwin?
     var file_out = if (builtin.target.os.tag == .windows)
         std.fs.File{ .handle = pipe[1].? }
     else
         std.fs.File{ .handle = pipe[1] };
 
-    defer if (comptime !builtin.target.isDarwin()) file_out.close();
+    defer file_out.close();
     const file_out_writer = file_out.writer();
     try file_out_writer.writeAll("test123\x17"); // ETB = \x17
     const ret_val = try child_proc.wait();

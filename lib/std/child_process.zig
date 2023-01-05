@@ -60,8 +60,8 @@ pub const ChildProcess = struct {
     /// Use this for additional posix spawn attributes.
     /// Do not set spawn attribute flags and do not modify stdin, stdout, stderr
     /// behavior, because those are set in the platform-specific spawn method.
-    posix_attr: if (builtin.target.isDarwin()) ?os.posix_spawn.Attr else void,
-    posix_actions: if (builtin.target.isDarwin()) ?os.posix_spawn.Actions else void,
+    posix_attr: if (os.hasPosixSpawn) ?os.posix_spawn.Attr else void,
+    posix_actions: if (os.hasPosixSpawn) ?os.posix_spawn.Actions else void,
 
     /// Darwin-only. Disable ASLR for the child process.
     disable_aslr: bool = false,
@@ -111,11 +111,6 @@ pub const ChildProcess = struct {
         child_to_parent,
     };
 
-    pub const PosixData = union(enum) {
-        Attribute: os.posix_spawn.Attr,
-        Actions: os.posix_spawn.Actions,
-    };
-
     /// First argument in argv is the executable.
     pub fn init(argv: []const []const u8, allocator: mem.Allocator) ChildProcess {
         return .{
@@ -137,8 +132,8 @@ pub const ChildProcess = struct {
             .stdout_behavior = StdIo.Inherit,
             .stderr_behavior = StdIo.Inherit,
             .expand_arg0 = .no_expand,
-            .posix_attr = if (comptime builtin.target.isDarwin()) null else undefined,
-            .posix_actions = if (comptime builtin.target.isDarwin()) null else undefined,
+            .posix_attr = if (os.hasPosixSpawn) null else undefined,
+            .posix_actions = if (os.hasPosixSpawn) null else undefined,
         };
     }
 
@@ -154,7 +149,7 @@ pub const ChildProcess = struct {
             @compileError("the target operating system cannot spawn processes");
         }
 
-        if (comptime builtin.target.isDarwin()) {
+        if (os.hasPosixSpawn) {
             return self.spawnMacos();
         }
 
@@ -486,7 +481,7 @@ pub const ChildProcess = struct {
     }
 
     fn waitUnwrapped(self: *ChildProcess) !void {
-        const res: os.WaitPidResult = if (comptime builtin.target.isDarwin())
+        const res: os.WaitPidResult = if (os.hasPosixSpawn)
             try os.posix_spawn.waitpid(self.pid, 0)
         else
             os.waitpid(self.pid, 0);
@@ -566,9 +561,9 @@ pub const ChildProcess = struct {
     }
 
     fn spawnMacos(self: *ChildProcess) SpawnError!void {
-        // cleanup user-initialization and initialization in this function
-        defer if (self.posix_attr != null) self.posix_attr.?.deinit();
-        defer if (self.posix_actions != null) self.posix_actions.?.deinit();
+        // dont cleanup structure owned == initialized by user
+        const user_attr: bool = self.posix_attr != null;
+        const user_actions: bool = self.posix_actions != null;
 
         const pipe_flags = if (io.is_async) os.O.NONBLOCK else 0;
         const stdin_pipe = if (self.stdin_behavior == StdIo.Pipe) try os.pipe2(pipe_flags) else undefined;
@@ -597,8 +592,8 @@ pub const ChildProcess = struct {
             undefined;
         defer if (any_ignore) os.close(dev_null_fd);
 
-        if (self.posix_attr == null)
-            self.posix_attr = try os.posix_spawn.Attr.init();
+        if (user_attr == false) self.posix_attr = try os.posix_spawn.Attr.init();
+        defer if (user_attr == false) self.posix_attr.?.deinit();
         var flags: u16 = os.darwin.POSIX_SPAWN_SETSIGDEF | os.darwin.POSIX_SPAWN_SETSIGMASK;
         if (self.disable_aslr) {
             flags |= os.darwin._POSIX_SPAWN_DISABLE_ASLR;
@@ -608,8 +603,8 @@ pub const ChildProcess = struct {
         }
         try self.posix_attr.?.set(flags);
 
-        if (self.posix_actions == null)
-            self.posix_actions = try os.posix_spawn.Actions.init();
+        if (user_actions == false) self.posix_actions = try os.posix_spawn.Actions.init();
+        defer if (user_actions == false) self.posix_actions.?.deinit();
 
         try setUpChildIoPosixSpawn(self.stdin_behavior, &self.posix_actions.?, stdin_pipe, os.STDIN_FILENO, dev_null_fd);
         try setUpChildIoPosixSpawn(self.stdout_behavior, &self.posix_actions.?, stdout_pipe, os.STDOUT_FILENO, dev_null_fd);
@@ -946,6 +941,9 @@ pub const ChildProcess = struct {
 
         const cmd_line = try windowsCreateCommandLine(self.allocator, self.argv);
         defer self.allocator.free(cmd_line);
+
+        // TODO use explicit list of file handles
+        // https://devblogs.microsoft.com/oldnewthing/20111216-00/?p=8873
 
         var siStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
