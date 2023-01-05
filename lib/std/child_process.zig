@@ -901,8 +901,8 @@ pub const ChildProcess = struct {
                     &saAttr,
                     PipeDirection.child_to_parent,
                 );
-                g_hChildStd_OUT_Rd.* = tmp_hChildStd_Rd.*;
-                g_hChildStd_OUT_Wr.* = tmp_hChildStd_Wr.*;
+                g_hChildStd_OUT_Rd = tmp_hChildStd_Rd;
+                g_hChildStd_OUT_Wr = tmp_hChildStd_Wr;
             },
             StdIo.Ignore => {
                 g_hChildStd_OUT_Wr = nul_handle;
@@ -928,8 +928,8 @@ pub const ChildProcess = struct {
                     &saAttr,
                     PipeDirection.child_to_parent,
                 );
-                g_hChildStd_ERR_Rd.* = tmp_hChildStd_Rd.*;
-                g_hChildStd_ERR_Wr.* = tmp_hChildStd_Wr.*;
+                g_hChildStd_ERR_Rd = tmp_hChildStd_Rd;
+                g_hChildStd_ERR_Wr = tmp_hChildStd_Wr;
             },
             StdIo.Ignore => {
                 g_hChildStd_ERR_Wr = nul_handle;
@@ -1507,8 +1507,8 @@ var pipe_name_counter = std.atomic.Atomic(u32).init(1);
 /// in the security attributes.
 /// Direction defines which handle is updated (to enable inheritance by ChildProcess)
 pub fn windowsMakeAsyncPipe(
-    rd: *?windows.HANDLE,
-    wr: *?windows.HANDLE,
+    rd: *windows.HANDLE,
+    wr: *windows.HANDLE,
     sattr: *const windows.SECURITY_ATTRIBUTES,
     direction: ChildProcess.PipeDirection,
 ) !void {
