@@ -889,16 +889,20 @@ pub const ChildProcess = struct {
             windowsDestroyPipe(g_hChildStd_IN_Rd, g_hChildStd_IN_Wr);
         };
 
+        var tmp_hChildStd_Rd: windows.HANDLE = undefined;
+        var tmp_hChildStd_Wr: windows.HANDLE = undefined;
         var g_hChildStd_OUT_Rd: ?windows.HANDLE = null;
         var g_hChildStd_OUT_Wr: ?windows.HANDLE = null;
         switch (self.stdout_behavior) {
             StdIo.Pipe => {
                 try windowsMakeAsyncPipe(
-                    &g_hChildStd_OUT_Rd,
-                    &g_hChildStd_OUT_Wr,
+                    &tmp_hChildStd_Rd,
+                    &tmp_hChildStd_Wr,
                     &saAttr,
                     PipeDirection.child_to_parent,
                 );
+                g_hChildStd_OUT_Rd.* = tmp_hChildStd_Rd.*;
+                g_hChildStd_OUT_Wr.* = tmp_hChildStd_Wr.*;
             },
             StdIo.Ignore => {
                 g_hChildStd_OUT_Wr = nul_handle;
@@ -919,11 +923,13 @@ pub const ChildProcess = struct {
         switch (self.stderr_behavior) {
             StdIo.Pipe => {
                 try windowsMakeAsyncPipe(
-                    &g_hChildStd_ERR_Rd,
-                    &g_hChildStd_ERR_Wr,
+                    &tmp_hChildStd_Rd,
+                    &tmp_hChildStd_Wr,
                     &saAttr,
                     PipeDirection.child_to_parent,
                 );
+                g_hChildStd_ERR_Rd.* = tmp_hChildStd_Rd.*;
+                g_hChildStd_ERR_Wr.* = tmp_hChildStd_Wr.*;
             },
             StdIo.Ignore => {
                 g_hChildStd_ERR_Wr = nul_handle;

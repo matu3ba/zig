@@ -32,7 +32,7 @@ pub fn main() !void {
     const child_path = it.next() orelse unreachable;
 
     // use posix convention: 0 read, 1 write
-    var pipe: if (builtin.os.tag == .windows) [2]?windows.HANDLE else [2]os.fd_t = undefined;
+    var pipe: if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t = undefined;
     if (builtin.os.tag == .windows) {
         const saAttr = windows.SECURITY_ATTRIBUTES{
             .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
@@ -47,12 +47,7 @@ pub fn main() !void {
 
     // write read side of pipe to string + add to spawn command
     var buf: [handleCharSize]u8 = comptime [_]u8{0} ** handleCharSize;
-    const s_handle =
-        if (builtin.os.tag == .windows)
-        try handleToString(pipe[0].?, &buf)
-    else
-        try handleToString(pipe[0], &buf);
-
+    const s_handle = try handleToString(pipe[0], &buf);
     var child_proc = ChildProcess.init(
         &.{ child_path, s_handle },
         gpa,
@@ -62,15 +57,12 @@ pub fn main() !void {
         if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
         defer if (os.hasPosixSpawn) child_proc.posix_actions.?.deinit();
         if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[1]); // TODO: This is not closed in child
-        defer if (builtin.os.tag == .windows)
-            os.close(pipe[0].?)
-        else
-            os.close(pipe[0]);
+        defer os.close(pipe[0]);
 
         try child_proc.spawn();
     }
 
-    // call fcntl on Unixes to disable handle inheritance
+    // call fcntl on Unixes to disable handle inheritance (windows one is per default not enabled)
     if (builtin.os.tag != .windows) {
         try std.os.disableFileInheritance(pipe[1]);
     }
@@ -85,11 +77,7 @@ pub fn main() !void {
         try std.testing.expect((fcntl_flags & os.FD_CLOEXEC) != 0);
     }
 
-    var file_out = if (builtin.target.os.tag == .windows)
-        std.fs.File{ .handle = pipe[1].? }
-    else
-        std.fs.File{ .handle = pipe[1] };
-
+    var file_out = std.fs.File{ .handle = pipe[1] };
     defer file_out.close();
     const file_out_writer = file_out.writer();
     try file_out_writer.writeAll("test123\x17"); // ETB = \x17
