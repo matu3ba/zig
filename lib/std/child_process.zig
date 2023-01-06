@@ -1130,6 +1130,25 @@ pub const ChildProcess = struct {
     }
 };
 
+const PortPipeReturn = if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t;
+
+/// Portable pipe creation without handle inheritance
+pub fn portablePipe() !PortPipeReturn {
+    // TODO think how to offer user an interface to lpSecurityDescriptor
+    var pipe_new: PortPipeReturn = undefined;
+    if (builtin.os.tag == .windows) {
+        const saAttr = windows.SECURITY_ATTRIBUTES{
+            .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
+            .bInheritHandle = windows.FALSE,
+            .lpSecurityDescriptor = null,
+        };
+        try windowsMakeAsyncPipe(&pipe_new[os.pipe_rd], &pipe_new[os.pipe_wr], &saAttr);
+    } else {
+        pipe_new = try os.pipe2(@as(u32, os.O.CLOEXEC));
+    }
+    return pipe_new;
+}
+
 /// Expects `app_buf` to contain exactly the app name, and `dir_buf` to contain exactly the dir path.
 /// After return, `app_buf` will always contain exactly the app name and `dir_buf` will always contain exactly the dir path.
 /// Note: `app_buf` should not contain any leading path separators.

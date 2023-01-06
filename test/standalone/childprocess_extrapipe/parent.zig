@@ -19,22 +19,7 @@ pub fn main() !void {
     _ = it.next() orelse unreachable; // skip binary name
     const child_path = it.next() orelse unreachable;
 
-    // use posix convention: 0 read, 1 write
-    var pipe: if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t = undefined;
-    if (builtin.os.tag == .windows) {
-        const saAttr = windows.SECURITY_ATTRIBUTES{
-            .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
-            .bInheritHandle = windows.TRUE,
-            .lpSecurityDescriptor = null,
-        };
-        // create pipe without inheritance
-        try child_process.windowsMakeAsyncPipe(&pipe[pipe_rd], &pipe[pipe_wr], &saAttr);
-    } else {
-        // we could save setting and and unsetting 1 pipe end, but this would
-        // 1. allow more leak time and 2. makes things less consistent with windows
-        // TODO: benchmarks
-        pipe = try os.pipe2(@as(u32, os.O.CLOEXEC));
-    }
+    var pipe = try child_process.portablePipe();
 
     // write read side of pipe to string + add to spawn command
     var buf: [os.handleCharSize]u8 = comptime [_]u8{0} ** os.handleCharSize;
