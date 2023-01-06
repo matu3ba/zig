@@ -4871,21 +4871,21 @@ pub fn lseek_CUR_get(fd: fd_t) SeekError!u64 {
     }
 }
 
-const EnableFileInheritanceError = FcntlError || windows.SetHandleInformationError;
+const EnableInheritanceError = FcntlError || windows.SetHandleInformationError;
 
-pub inline fn enableFileInheritance(file_handle: fd_t) EnableFileInheritanceError!void {
+pub inline fn enableInheritance(file_handle: fd_t) EnableInheritanceError!void {
     if (builtin.os.tag == .windows) {
         try windows.SetHandleInformation(file_handle, windows.HANDLE_FLAG_INHERIT, 1);
     } else {
-        var flags = fcntl(file_handle, F.GETFD, 0);
+        var flags = try fcntl(file_handle, F.GETFD, 0);
         flags &= ~@as(u32, FD_CLOEXEC);
         _ = try fcntl(file_handle, F.SETFD, flags);
     }
 }
 
-const DisableFileInheritanceError = FcntlError || windows.SetHandleInformationError;
+const DisableInheritanceError = FcntlError || windows.SetHandleInformationError;
 
-pub inline fn disableFileInheritance(file_handle: fd_t) DisableFileInheritanceError!void {
+pub inline fn disableInheritance(file_handle: fd_t) DisableInheritanceError!void {
     if (builtin.os.tag == .windows) {
         try windows.SetHandleInformation(file_handle, windows.HANDLE_FLAG_INHERIT, 0);
     } else {

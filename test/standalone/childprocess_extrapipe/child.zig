@@ -23,7 +23,7 @@ pub fn main() !void {
         var fcntl_flags = try std.os.fcntl(file_handle, std.os.F.GETFD, 0);
         try std.testing.expect((fcntl_flags & std.os.FD_CLOEXEC) == 0);
     }
-    try std.os.disableFileInheritance(file_handle);
+    try std.os.disableInheritance(file_handle);
     var file_in = std.fs.File{ .handle = file_handle }; // read side of pipe
     defer file_in.close();
     const file_in_reader = file_in.reader();

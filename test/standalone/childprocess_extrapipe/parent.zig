@@ -27,10 +27,13 @@ pub fn main() !void {
             .bInheritHandle = windows.TRUE,
             .lpSecurityDescriptor = null,
         };
-        // create pipe and enable inheritance for the read end, which will be given to the child
-        try child_process.windowsMakeAsyncPipe(&pipe[pipe_rd], &pipe[pipe_wr], &saAttr, .parent_to_child);
+        // create pipe without inheritance
+        try child_process.windowsMakeAsyncPipe(&pipe[pipe_rd], &pipe[pipe_wr], &saAttr);
     } else {
-        pipe = try os.pipe(); // leaks on default, but more portable, TODO: use pip2 and close earlier?
+        // we could save setting and and unsetting 1 pipe end, but this would
+        // 1. allow more leak time and 2. makes things less consistent with windows
+        // TODO: benchmarks
+        pipe = try os.pipe2(@as(u32, os.O.CLOEXEC));
     }
 
     // write read side of pipe to string + add to spawn command
@@ -40,19 +43,18 @@ pub fn main() !void {
         &.{ child_path, s_handle },
         gpa,
     );
+
+    // enabling of file inheritance directly before and directly after spawn
+    // less time to leak => better
     {
-        // close read side of pipe, less time for leaking, if closed immediately with posix_spawn
         if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
         defer if (os.hasPosixSpawn) child_proc.posix_actions.?.deinit();
         if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[pipe_wr]);
+
+        try os.enableInheritance(pipe[pipe_rd]);
         defer os.close(pipe[pipe_rd]);
 
         try child_proc.spawn();
-    }
-
-    // call fcntl on Unixes to disable handle inheritance (windows one is per default not enabled)
-    if (builtin.os.tag != .windows) {
-        try std.os.disableFileInheritance(pipe[pipe_wr]);
     }
 
     // windows does have inheritance disabled on default, but we check to be sure
