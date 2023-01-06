@@ -10,11 +10,7 @@ pub fn main() !void {
     defer it.deinit();
     _ = it.next() orelse unreachable; // skip binary name
     const s_handle = it.next() orelse unreachable;
-
-    var file_handle: std.os.fd_t = if (builtin.target.os.tag == .windows)
-        @intToPtr(windows.HANDLE, try std.fmt.parseInt(usize, s_handle, 10))
-    else
-        try std.fmt.parseInt(std.os.fd_t, s_handle, 10);
+    var file_handle = try std.os.stringToHandle(s_handle);
     // TODO: Is there a way on Windows to let the Kernel disable inheritance
     // after it is inherited in CreateProcess???
     if (builtin.target.os.tag == .windows) {

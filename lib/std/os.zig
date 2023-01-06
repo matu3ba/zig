@@ -44,8 +44,33 @@ pub const windows = @import("os/windows.zig");
 pub const posix_spawn = @import("os/posix_spawn.zig");
 pub const ptrace = @import("os/ptrace.zig");
 
-// TODO where should we add our own target infos for things that we have bindings for?
+// Zig support for posix spawn on the platform
 pub const hasPosixSpawn = builtin.target.isDarwin();
+/// Pipe read side
+pub const pipe_rd = 0;
+/// Pipe write side
+pub const pipe_wr = 1;
+
+pub const windowsPtrDigits: usize = std.math.log10(math.maxInt(usize));
+pub const otherPtrDigits: usize = std.math.log10(math.maxInt(u32)) + 1; // +1 for sign
+pub const handleCharSize = if (builtin.target.os.tag == .windows) windowsPtrDigits else otherPtrDigits;
+
+pub fn handleToString(handle: fd_t, buf: []u8) std.fmt.BufPrintError![]u8 {
+    var s_handle: []u8 = undefined;
+    const handle_int =
+        // handle is *anyopaque or an integer on unix-likes Kernels.
+        if (builtin.target.os.tag == .windows) @ptrToInt(handle) else handle;
+    s_handle = try std.fmt.bufPrint(buf[0..], "{d}", .{handle_int});
+    return s_handle;
+}
+
+pub fn stringToHandle(s_handle: []const u8) std.fmt.ParseIntError!std.os.fd_t {
+    var file_handle: std.os.fd_t = if (builtin.target.os.tag == .windows)
+        @intToPtr(windows.HANDLE, try std.fmt.parseInt(usize, s_handle, 10))
+    else
+        try std.fmt.parseInt(std.os.fd_t, s_handle, 10);
+    return file_handle;
+}
 
 comptime {
     assert(@import("std") == std); // std lib tests require --zig-lib-dir

@@ -6,20 +6,8 @@ const windows = std.os.windows;
 const os = std.os;
 const testing = std.testing;
 const child_process = std.child_process;
-
-const windowsPtrDigits: usize = std.math.log10(math.maxInt(usize));
-const otherPtrDigits: usize = std.math.log10(math.maxInt(u32)) + 1; // +1 for sign
-const handleCharSize = if (builtin.target.os.tag == .windows) windowsPtrDigits else otherPtrDigits;
-
-/// assert: buf can store the handle
-fn handleToString(handle: os.fd_t, buf: []u8) std.fmt.BufPrintError![]u8 {
-    var s_handle: []u8 = undefined;
-    const handle_int =
-        // handle is *anyopaque or an integer on unix-likes Kernels.
-        if (builtin.target.os.tag == .windows) @ptrToInt(handle) else handle;
-    s_handle = try std.fmt.bufPrint(buf[0..], "{d}", .{handle_int});
-    return s_handle;
-}
+const pipe_rd = os.pipe_rd;
+const pipe_wr = os.pipe_wr;
 
 pub fn main() !void {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{}){};
@@ -40,44 +28,44 @@ pub fn main() !void {
             .lpSecurityDescriptor = null,
         };
         // create pipe and enable inheritance for the read end, which will be given to the child
-        try child_process.windowsMakeAsyncPipe(&pipe[0], &pipe[1], &saAttr, .parent_to_child);
+        try child_process.windowsMakeAsyncPipe(&pipe[pipe_rd], &pipe[pipe_wr], &saAttr, .parent_to_child);
     } else {
         pipe = try os.pipe(); // leaks on default, but more portable, TODO: use pip2 and close earlier?
     }
 
     // write read side of pipe to string + add to spawn command
-    var buf: [handleCharSize]u8 = comptime [_]u8{0} ** handleCharSize;
-    const s_handle = try handleToString(pipe[0], &buf);
+    var buf: [os.handleCharSize]u8 = comptime [_]u8{0} ** os.handleCharSize;
+    const s_handle = try os.handleToString(pipe[pipe_rd], &buf);
     var child_proc = ChildProcess.init(
         &.{ child_path, s_handle },
         gpa,
     );
     {
-        // close read side of pipe, less time for leaking, if closed immediately
+        // close read side of pipe, less time for leaking, if closed immediately with posix_spawn
         if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
         defer if (os.hasPosixSpawn) child_proc.posix_actions.?.deinit();
-        if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[1]); // TODO: This is not closed in child
-        defer os.close(pipe[0]);
+        if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[pipe_wr]);
+        defer os.close(pipe[pipe_rd]);
 
         try child_proc.spawn();
     }
 
     // call fcntl on Unixes to disable handle inheritance (windows one is per default not enabled)
     if (builtin.os.tag != .windows) {
-        try std.os.disableFileInheritance(pipe[1]);
+        try std.os.disableFileInheritance(pipe[pipe_wr]);
     }
 
     // windows does have inheritance disabled on default, but we check to be sure
     if (builtin.target.os.tag == .windows) {
         var handle_flags: windows.DWORD = undefined;
-        try windows.GetHandleInformation(pipe[1].?, &handle_flags);
+        try windows.GetHandleInformation(pipe[pipe_wr], &handle_flags);
         std.debug.assert(handle_flags & windows.HANDLE_FLAG_INHERIT == 0);
     } else {
-        const fcntl_flags = try os.fcntl(pipe[1], os.F.GETFD, 0);
+        const fcntl_flags = try os.fcntl(pipe[pipe_wr], os.F.GETFD, 0);
         try std.testing.expect((fcntl_flags & os.FD_CLOEXEC) != 0);
     }
 
-    var file_out = std.fs.File{ .handle = pipe[1] };
+    var file_out = std.fs.File{ .handle = pipe[pipe_wr] };
     defer file_out.close();
     const file_out_writer = file_out.writer();
     try file_out_writer.writeAll("test123\x17"); // ETB = \x17
