@@ -899,7 +899,6 @@ pub const ChildProcess = struct {
                     &tmp_hChildStd_Rd,
                     &tmp_hChildStd_Wr,
                     &saAttr,
-                    PipeDirection.child_to_parent,
                 );
                 g_hChildStd_OUT_Rd = tmp_hChildStd_Rd;
                 g_hChildStd_OUT_Wr = tmp_hChildStd_Wr;
@@ -926,7 +925,6 @@ pub const ChildProcess = struct {
                     &tmp_hChildStd_Rd,
                     &tmp_hChildStd_Wr,
                     &saAttr,
-                    PipeDirection.child_to_parent,
                 );
                 g_hChildStd_ERR_Rd = tmp_hChildStd_Rd;
                 g_hChildStd_ERR_Wr = tmp_hChildStd_Wr;
@@ -1133,7 +1131,7 @@ pub const ChildProcess = struct {
 const PortPipeReturn = if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t;
 
 /// Portable pipe creation without handle inheritance
-pub fn portablePipe() !PortPipeReturn {
+pub inline fn portablePipe() !PortPipeReturn {
     // TODO think how to offer user an interface to lpSecurityDescriptor
     var pipe_new: PortPipeReturn = undefined;
     if (builtin.os.tag == .windows) {
@@ -1529,7 +1527,6 @@ pub fn windowsMakeAsyncPipe(
     rd: *windows.HANDLE,
     wr: *windows.HANDLE,
     sattr: *const windows.SECURITY_ATTRIBUTES,
-    direction: ChildProcess.PipeDirection,
 ) !void {
     var tmp_bufw: [128]u16 = undefined;
 
@@ -1585,10 +1582,6 @@ pub fn windowsMakeAsyncPipe(
     }
     errdefer os.close(write_handle);
 
-    switch (direction) {
-        .child_to_parent => try windows.SetHandleInformation(read_handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT),
-        .parent_to_child => try windows.SetHandleInformation(write_handle, windows.HANDLE_FLAG_INHERIT, windows.HANDLE_FLAG_INHERIT),
-    }
     rd.* = read_handle;
     wr.* = write_handle;
 }

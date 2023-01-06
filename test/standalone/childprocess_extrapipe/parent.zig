@@ -29,7 +29,7 @@ pub fn main() !void {
         gpa,
     );
 
-    // enabling of file inheritance directly before and directly after spawn
+    // enabling of file inheritance directly before and closing directly after spawn
     // less time to leak => better
     {
         if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
