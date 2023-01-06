@@ -1128,12 +1128,12 @@ pub const ChildProcess = struct {
     }
 };
 
-const PortPipeReturn = if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t;
+const PortPipeT = if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.fd_t;
 
 /// Portable pipe creation without handle inheritance
-pub inline fn portablePipe() !PortPipeReturn {
+pub inline fn portablePipe() !PortPipeT {
     // TODO think how to offer user an interface to lpSecurityDescriptor
-    var pipe_new: PortPipeReturn = undefined;
+    var pipe_new: PortPipeT = undefined;
     if (builtin.os.tag == .windows) {
         const saAttr = windows.SECURITY_ATTRIBUTES{
             .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
