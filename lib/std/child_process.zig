@@ -30,11 +30,11 @@ pub const ChildProcess = struct {
     stderr: ?File,
 
     /// Windows only. Handles for child process to inherit.
-    /// - Set filled_handles to how much space is used.
+    /// - Set count_handles to how much space is used starting from 0.
     /// - Leave 3 fields at end of slice empty for stdin, stdout, stderr.
-    /// - Do not add stdin, stdout, stderr.
-    handles: ?[]os.fd_t,
-    filled_handles: u16,
+    /// - Do not add stdin|out|err: count_handles must not contain the standard streams.
+    handles: if (builtin.os.tag == .windows) ?[]os.fd_t else void,
+    count_handles: if (builtin.os.tag == .windows) u32 else void,
 
     term: ?(SpawnError!Term),
 
@@ -139,7 +139,7 @@ pub const ChildProcess = struct {
             .stdout_behavior = StdIo.Inherit,
             .stderr_behavior = StdIo.Inherit,
             .handles = null,
-            .filled_handles = 0,
+            .count_handles = 0,
             .expand_arg0 = .no_expand,
             .posix_attr = if (os.hasPosixSpawn) null else undefined,
             .posix_actions = if (os.hasPosixSpawn) null else undefined,
@@ -843,20 +843,27 @@ pub const ChildProcess = struct {
             os.close(stderr_pipe[1]);
         }
     }
+    fn assignHandleWindows(self: *ChildProcess, opt_file: ?File) void {
+       if (opt_file) |file| {
+         self.handles.?[self.count_handles] = file.handle;
+         self.count_handles += 1;
+       }
+    }
 
     fn spawnWindows(self: *ChildProcess) SpawnError!void {
         var stdstream_buffer: [3]os.fd_t = undefined;
         if (self.handles == null) {
+            self.count_handles = 0;
             self.handles = &stdstream_buffer;
-            self.handles.?[0] = self.stdin.?.handle;
-            self.handles.?[1] = self.stdout.?.handle;
-            self.handles.?[2] = self.stderr.?.handle;
+            self.assignHandleWindows(self.stdin);
+            self.assignHandleWindows(self.stdout);
+            self.assignHandleWindows(self.stderr);
         } else {
-            assert(self.handles.?.len <= std.math.maxInt(@TypeOf(self.filled_handles)));
-            assert(@as(u32, self.filled_handles) + 3 < self.handles.?.len);
-            self.handles.?[self.handles.?.len - 3] = self.stdin.?.handle;
-            self.handles.?[self.handles.?.len - 2] = self.stdout.?.handle;
-            self.handles.?[self.handles.?.len - 1] = self.stderr.?.handle;
+            assert(self.handles.?.len <= std.math.maxInt(@TypeOf(self.count_handles)));
+            assert(@as(u32, self.count_handles) + 3 < self.handles.?.len);
+            self.assignHandleWindows(self.stdin);
+            self.assignHandleWindows(self.stdout);
+            self.assignHandleWindows(self.stderr);
         }
 
         const saAttr = windows.SECURITY_ATTRIBUTES{
@@ -973,15 +980,17 @@ pub const ChildProcess = struct {
         // new processes in Win32" by Raymond Chen
         var attrib_list: ?windows.LPPROC_THREAD_ATTRIBUTE_LIST = null;
         var size_attr_list: windows.SIZE_T = 0;
-        if (self.handles.?.len < 0xFFFF_FFFF / @sizeOf(windows.HANDLE)) {
-            @panic("invalidParamters"); // DEBUG
-        }
-        var suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
+        // if (self.handles.?.len < 0xFFFF_FFFF / @sizeOf(windows.HANDLE)) {
+        //     @panic("invalidParamters"); // DEBUG
+        // }
+        var suc = windows.kernel32.InitializeProcThreadAttributeList(null, self.count_handles, 0, &size_attr_list,);
         std.debug.assert(suc == 0); // DEBUG
+        std.debug.assert(size_attr_list > 0);
+        std.debug.print("size_attr_list: {d}\n", .{size_attr_list});
         var attrib_list_block = try self.allocator.alloc(u8, self.handles.?.len);
         defer self.allocator.free(attrib_list_block);
         attrib_list = attrib_list_block.ptr;
-        suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
+        suc = windows.kernel32.InitializeProcThreadAttributeList(attrib_list, self.count_handles, 0, &size_attr_list,);
         std.debug.assert(suc != 0); // DEBUG
 
         suc = windows.kernel32.UpdateProcThreadAttribute(
@@ -993,6 +1002,7 @@ pub const ChildProcess = struct {
             null,
             null,
         );
+        std.debug.assert(suc != 0); // DEBUG
 
         var lpStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
