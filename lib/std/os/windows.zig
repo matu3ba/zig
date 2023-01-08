@@ -1576,6 +1576,50 @@ pub fn GetEnvironmentVariableW(lpName: LPWSTR, lpBuffer: [*]u16, nSize: DWORD) G
     return rc;
 }
 
+
+pub fn InitializeProcThreadAttributeList(
+    lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
+    dwAttributeCount: DWORD,
+    dwFlags: DWORD,
+    lpSize: ?*SIZE_T,
+) !void {
+    if (kernel32.InitializeProcThreadAttributeList(
+        lpAttributeList,
+        dwAttributeCount,
+        dwFlags,
+        lpSize,
+    ) == 0) {
+        switch (kernel32.GetLastError()) {
+            .INSUFFICIENT_BUFFER => return error.InsufficientBuffer,
+            else => |err| return unexpectedError(err),
+        }
+    }
+}
+
+pub fn UpdateProcThreadAttribute(
+    lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
+    dwFlags: DWORD,
+    Attribute: DWORD_PTR,
+    lpValue: *anyopaque,
+    cbSize: SIZE_T,
+    lpPreviousValue: ?*anyopaque,
+    lpReturnSize: ?*SIZE_T,
+) !void {
+    if (kernel32.UpdateProcThreadAttribute(
+    lpAttributeList,
+    dwFlags,
+    Attribute,
+    lpValue,
+    cbSize,
+    lpPreviousValue,
+    lpReturnSize,
+    ) == 0) {
+        switch (kernel32.GetLastError()) {
+            else => |err| return unexpectedError(err),
+        }
+    }
+}
+
 // see macro ProcThreadAttributeValue
 const PROC_THREAD_ATTRIBUTE = packed struct {
     NUMBER: enum(u16) {
@@ -1663,7 +1707,7 @@ pub const PROCESS_CREATION_FLAGS = enum(u32) {
 };
 // zig fmt: on
 
-pub const CreateProcessError = error{
+pub const CreateProcessErrorW = error{
     FileNotFound,
     AccessDenied,
     InvalidName,
@@ -1683,7 +1727,7 @@ pub fn CreateProcessW(
     lpCurrentDirectory: ?LPWSTR,
     lpStartupInfo: *STARTUPINFOW,
     lpProcessInformation: *PROCESS_INFORMATION,
-) CreateProcessError!void {
+) CreateProcessErrorW!void {
     if (kernel32.CreateProcessW(
         lpApplicationName,
         lpCommandLine,
@@ -1731,6 +1775,8 @@ pub fn CreateProcessW(
         }
     }
 }
+
+// pub const CreateProcessError = error {};
 
 pub const LoadLibraryError = error{
     FileNotFound,

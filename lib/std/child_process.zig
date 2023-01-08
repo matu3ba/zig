@@ -983,17 +983,26 @@ pub const ChildProcess = struct {
         // if (self.handles.?.len < 0xFFFF_FFFF / @sizeOf(windows.HANDLE)) {
         //     @panic("invalidParamters"); // DEBUG
         // }
-        var suc = windows.kernel32.InitializeProcThreadAttributeList(null, self.count_handles, 0, &size_attr_list,);
-        std.debug.assert(suc == 0); // DEBUG
+        const res = windows.InitializeProcThreadAttributeList(
+            null,
+            self.count_handles, 0,
+            &size_attr_list,
+        );
+        std.debug.print("res: {any}\n", .{res});
         std.debug.assert(size_attr_list > 0);
         std.debug.print("size_attr_list: {d}\n", .{size_attr_list});
+        std.debug.assert(res == error.InsufficientBuffer);
         var attrib_list_block = try self.allocator.alloc(u8, self.handles.?.len);
         defer self.allocator.free(attrib_list_block);
         attrib_list = attrib_list_block.ptr;
-        suc = windows.kernel32.InitializeProcThreadAttributeList(attrib_list, self.count_handles, 0, &size_attr_list,);
-        std.debug.assert(suc != 0); // DEBUG
+        const res2 = windows.InitializeProcThreadAttributeList(attrib_list,
+            self.count_handles,
+            0,
+            &size_attr_list,
+        );
+        std.debug.print("res2: {any}\n", .{res2});
 
-        suc = windows.kernel32.UpdateProcThreadAttribute(
+        const res3 = windows.UpdateProcThreadAttribute(
             attrib_list,
             0,
             windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
@@ -1002,7 +1011,7 @@ pub const ChildProcess = struct {
             null,
             null,
         );
-        std.debug.assert(suc != 0); // DEBUG
+        std.debug.print("res3: {any}\n", .{res3});
 
         var lpStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
