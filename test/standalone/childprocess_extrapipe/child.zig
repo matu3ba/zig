@@ -11,8 +11,7 @@ pub fn main() !void {
     _ = it.next() orelse unreachable; // skip binary name
     const s_handle = it.next() orelse unreachable;
     var file_handle = try std.os.stringToHandle(s_handle);
-    // TODO: Is there a way on Windows to let the Kernel disable inheritance
-    // after it is inherited in CreateProcess???
+
     if (builtin.target.os.tag == .windows) {
         // windows.HANDLE_FLAG_INHERIT is enabled
         var handle_flags: windows.DWORD = undefined;
@@ -23,6 +22,7 @@ pub fn main() !void {
         var fcntl_flags = try std.os.fcntl(file_handle, std.os.F.GETFD, 0);
         try std.testing.expect((fcntl_flags & std.os.FD_CLOEXEC) == 0);
     }
+
     try std.os.disableInheritance(file_handle);
     var file_in = std.fs.File{ .handle = file_handle }; // read side of pipe
     defer file_in.close();

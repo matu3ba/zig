@@ -847,7 +847,7 @@ pub const ChildProcess = struct {
     fn spawnWindows(self: *ChildProcess) SpawnError!void {
         var stdstream_buffer: [3]os.fd_t = undefined;
         if (self.handles == null) {
-            self.handles = stdstream_buffer;
+            self.handles = &stdstream_buffer;
             self.handles.?[0] = self.stdin.?.handle;
             self.handles.?[1] = self.stdout.?.handle;
             self.handles.?[2] = self.stderr.?.handle;
@@ -978,28 +978,23 @@ pub const ChildProcess = struct {
         }
         var suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
         std.debug.assert(suc == 0); // DEBUG
-        attrib_list = try self.allocator.alloc(windows.LPPROC_THREAD_ATTRIBUTE_LIST, self.handles.?.len);
-        defer attrib_list.free(attrib_list);
+        var attrib_list_block = try self.allocator.alloc(u8, self.handles.?.len);
+        defer self.allocator.free(attrib_list_block);
+        attrib_list = attrib_list_block.ptr;
         suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
         std.debug.assert(suc != 0); // DEBUG
 
-        const proc_thread_attr = windows.PROC_THREAD_ATTRIBUTE{
-            .NUMBER = .ProcThreadAttributeHandleList,
-            .ADDITIVE = false,
-            .THREAD = true,
-            .INPUT = false,
-        };
         suc = windows.kernel32.UpdateProcThreadAttribute(
             attrib_list,
             0,
-            proc_thread_attr,
-            self.handles.?.ptr,
+            windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+            @ptrCast(*anyopaque, self.handles.?.ptr),
             self.handles.?.len * @sizeOf(windows.HANDLE),
             null,
             null,
         );
 
-        var siStartInfo = windows.STARTUPINFOW{
+        var lpStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
             .hStdError = g_hChildStd_ERR_Wr,
             .hStdOutput = g_hChildStd_OUT_Wr,
@@ -1021,7 +1016,7 @@ pub const ChildProcess = struct {
             .lpReserved2 = null,
         };
         var ext_info = windows.STARTUPINFOEXW{
-            .StartupInfo = siStartInfo,
+            .lpStartupInfo = lpStartInfo,
             .lpAttributeList = attrib_list,
         };
 
@@ -1462,7 +1457,7 @@ fn windowsCreateProcess(
         @enumToInt(CREATE_UNICODE_ENVIRONMENT) | @enumToInt(EXTENDED_STARTUPINFO_PRESENT),
         @ptrCast(?*anyopaque, envp_ptr),
         cwd_ptr,
-        ext_info.lpStartupInfo,
+        &ext_info.lpStartupInfo,
         lpProcessInformation,
     );
 }

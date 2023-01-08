@@ -1577,7 +1577,7 @@ pub fn GetEnvironmentVariableW(lpName: LPWSTR, lpBuffer: [*]u16, nSize: DWORD) G
 }
 
 // see macro ProcThreadAttributeValue
-pub const PROC_THREAD_ATTRIBUTE = packed struct {
+const PROC_THREAD_ATTRIBUTE = packed struct {
     NUMBER: enum(u16) {
         ProcThreadAttributeParentProcess = 0,
         // <- gap ->
@@ -1608,6 +1608,14 @@ pub const PROC_THREAD_ATTRIBUTE = packed struct {
     THREAD: bool, // 0x00010000
     INPUT: bool, // 0x00020000
 };
+
+pub const PROC_THREAD_ATTRIBUTE_HANDLE_LIST =
+    @intCast(DWORD_PTR, @bitCast(u19, PROC_THREAD_ATTRIBUTE{
+    .NUMBER = .ProcThreadAttributeHandleList,
+    .ADDITIVE = false,
+    .THREAD = true,
+    .INPUT = false,
+}));
 
 pub const LPPROC_THREAD_ATTRIBUTE_LIST = *anyopaque;
 

@@ -8,6 +8,7 @@ const CONSOLE_SCREEN_BUFFER_INFO = windows.CONSOLE_SCREEN_BUFFER_INFO;
 const CONTEXT = windows.CONTEXT;
 const COORD = windows.COORD;
 const DWORD = windows.DWORD;
+const DWORD_PTR = windows.DWORD_PTR;
 const DWORD64 = windows.DWORD64;
 const FILE_INFO_BY_HANDLE_CLASS = windows.FILE_INFO_BY_HANDLE_CLASS;
 const HANDLE = windows.HANDLE;
@@ -118,17 +119,17 @@ pub extern "kernel32" fn InitializeProcThreadAttributeList(
     lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
     dwAttributeCount: DWORD,
     dwFlags: DWORD,
-    lpSize: ?*usize,
+    lpSize: ?*SIZE_T,
 ) callconv(WINAPI) BOOL;
 
 pub extern "kernel32" fn UpdateProcThreadAttribute(
     lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
     dwFlags: DWORD,
-    Attribute: usize,
-    lpValue: ?*anyopaque,
-    cbSize: usize,
+    Attribute: DWORD_PTR,
+    lpValue: *anyopaque,
+    cbSize: SIZE_T,
     lpPreviousValue: ?*anyopaque,
-    lpReturnSize: ?*usize,
+    lpReturnSize: ?*SIZE_T,
 ) callconv(WINAPI) BOOL;
 
 pub extern "kernel32" fn CreateProcessW(
