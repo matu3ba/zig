@@ -66,6 +66,7 @@ const UNWIND_HISTORY_TABLE = windows.UNWIND_HISTORY_TABLE;
 const RUNTIME_FUNCTION = windows.RUNTIME_FUNCTION;
 const KNONVOLATILE_CONTEXT_POINTERS = windows.KNONVOLATILE_CONTEXT_POINTERS;
 const EXCEPTION_ROUTINE = windows.EXCEPTION_ROUTINE;
+const LPPROC_THREAD_ATTRIBUTE_LIST = windows.LPPROC_THREAD_ATTRIBUTE_LIST;
 
 pub extern "kernel32" fn AddVectoredExceptionHandler(First: c_ulong, Handler: ?VECTORED_EXCEPTION_HANDLER) callconv(WINAPI) ?*anyopaque;
 pub extern "kernel32" fn RemoveVectoredExceptionHandler(Handle: HANDLE) callconv(WINAPI) c_ulong;
@@ -112,6 +113,23 @@ pub extern "kernel32" fn CreateNamedPipeW(
     nDefaultTimeOut: DWORD,
     lpSecurityAttributes: ?*const SECURITY_ATTRIBUTES,
 ) callconv(WINAPI) HANDLE;
+
+pub extern "kernel32" fn InitializeProcThreadAttributeList(
+    lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
+    dwAttributeCount: DWORD,
+    dwFlags: DWORD,
+    lpSize: ?*usize,
+) callconv(WINAPI) BOOL;
+
+pub extern "kernel32" fn UpdateProcThreadAttribute(
+    lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
+    dwFlags: DWORD,
+    Attribute: usize,
+    lpValue: ?*anyopaque,
+    cbSize: usize,
+    lpPreviousValue: ?*anyopaque,
+    lpReturnSize: ?*usize,
+) callconv(WINAPI) BOOL;
 
 pub extern "kernel32" fn CreateProcessW(
     lpApplicationName: ?LPWSTR,

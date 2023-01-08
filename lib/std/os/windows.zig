@@ -1576,6 +1576,46 @@ pub fn GetEnvironmentVariableW(lpName: LPWSTR, lpBuffer: [*]u16, nSize: DWORD) G
     return rc;
 }
 
+// see macro ProcThreadAttributeValue
+pub const PROC_THREAD_ATTRIBUTE = packed struct {
+    NUMBER: enum(u16) {
+        ProcThreadAttributeParentProcess = 0,
+        // <- gap ->
+        ProcThreadAttributeHandleList = 2,
+        ProcThreadAttributeGroupAffinity = 3,
+        ProcThreadAttributePreferredNode = 4,
+        ProcThreadAttributeIdealProcessor = 5,
+        ProcThreadAttributeUmsThread = 6,
+        ProcThreadAttributeMitigationPolicy = 7,
+        // <- gap ->
+        ProcThreadAttributeSecurityCapabilities = 9,
+        // <- gap ->
+        ProcThreadAttributeProtectionLevel = 11,
+        // <- gap ->
+        ProcThreadAttributeJobList = 13,
+        ProcThreadAttributeChildProcessPolicy = 14,
+        ProcThreadAttributeAllApplicationPackagesPolicy = 15,
+        ProcThreadAttributeWin32kFilter = 16,
+        ProcThreadAttributeSafeOpenPromptOriginClaim = 17,
+        ProcThreadAttributeDesktopAppPolicy = 18,
+        // <- gap: 19, 20, 21 ->
+        ProcThreadAttributePseudoConsole = 22,
+        // <- gap ->
+        ProcThreadAttributeMitigationAuditPolicy = 24,
+        _,
+    }, //  0 - 0x0000ffff (masked)
+    ADDITIVE: bool, // 0x00040000
+    THREAD: bool, // 0x00010000
+    INPUT: bool, // 0x00020000
+};
+
+pub const LPPROC_THREAD_ATTRIBUTE_LIST = *anyopaque;
+
+pub const STARTUPINFOEXW = extern struct {
+    lpStartupInfo: STARTUPINFOW,
+    lpAttributeList: ?LPPROC_THREAD_ATTRIBUTE_LIST,
+};
+
 // zig fmt: off
 pub const PROCESS_CREATION_FLAGS = enum(u32) {
     // <- gap here ->

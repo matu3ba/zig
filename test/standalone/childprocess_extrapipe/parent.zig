@@ -20,6 +20,7 @@ pub fn main() !void {
     const child_path = it.next() orelse unreachable;
 
     var pipe = try child_process.portablePipe();
+    var handles_inherit: if (builtin.target.os.tag == .windows) []os.fd_t else void = undefined;
 
     // write read side of pipe to string + add to spawn command
     var buf: [os.handleCharSize]u8 = comptime [_]u8{0} ** os.handleCharSize;
@@ -29,13 +30,19 @@ pub fn main() !void {
         gpa,
     );
 
-    // enabling of file inheritance directly before and closing directly after spawn
-    // less time to leak => better
+    // Inheritance and exec block.
     {
-        // Besides being faster to spawn, posix_spawn enables to close pipe[pipe_wr]
-        // within the child before it is closed from Kernel after execv.
-        // Note, that posix_spawn is executed in the child, so it does not allow
-        // to minimize the leaking time of the parent's handle side.
+        // All to be inherited handles must be set to handles
+        if (builtin.target.os.tag == .windows) {
+            handles_inherit = comptime [_]u8{0} ** 4;
+            handles_inherit[0] = pipe[pipe_rd];
+            child_proc.handles = handles_inherit;
+            child_proc.filled_handles += 1;
+        }
+        // Enabling of file inheritance directly before and closing directly after spawn
+        // less time to leak => better
+        // Besides being faster to spawn, posix_spawn enables to execute actions
+        // in the child, before it does execv. Here pipe[pipe_wr] is closed.
         if (os.hasPosixSpawn) child_proc.posix_actions = try os.posix_spawn.Actions.init();
         defer if (os.hasPosixSpawn) child_proc.posix_actions.?.deinit();
         if (os.hasPosixSpawn) try child_proc.posix_actions.?.close(pipe[pipe_wr]);

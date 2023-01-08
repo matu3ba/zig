@@ -29,6 +29,13 @@ pub const ChildProcess = struct {
     stdout: ?File,
     stderr: ?File,
 
+    /// Windows only. Handles for child process to inherit.
+    /// - Set filled_handles to how much space is used.
+    /// - Leave 3 fields at end of slice empty for stdin, stdout, stderr.
+    /// - Do not add stdin, stdout, stderr.
+    handles: ?[]os.fd_t,
+    filled_handles: u16,
+
     term: ?(SpawnError!Term),
 
     argv: []const []const u8,
@@ -131,6 +138,8 @@ pub const ChildProcess = struct {
             .stdin_behavior = StdIo.Inherit,
             .stdout_behavior = StdIo.Inherit,
             .stderr_behavior = StdIo.Inherit,
+            .handles = null,
+            .filled_handles = 0,
             .expand_arg0 = .no_expand,
             .posix_attr = if (os.hasPosixSpawn) null else undefined,
             .posix_actions = if (os.hasPosixSpawn) null else undefined,
@@ -836,6 +845,20 @@ pub const ChildProcess = struct {
     }
 
     fn spawnWindows(self: *ChildProcess) SpawnError!void {
+        var stdstream_buffer: [3]os.fd_t = undefined;
+        if (self.handles == null) {
+            self.handles = stdstream_buffer;
+            self.handles.?[0] = self.stdin.?.handle;
+            self.handles.?[1] = self.stdout.?.handle;
+            self.handles.?[2] = self.stderr.?.handle;
+        } else {
+            assert(self.handles.?.len <= std.math.maxInt(@TypeOf(self.filled_handles)));
+            assert(@as(u32, self.filled_handles) + 3 < self.handles.?.len);
+            self.handles.?[self.handles.?.len - 3] = self.stdin.?.handle;
+            self.handles.?[self.handles.?.len - 2] = self.stdout.?.handle;
+            self.handles.?[self.handles.?.len - 1] = self.stderr.?.handle;
+        }
+
         const saAttr = windows.SECURITY_ATTRIBUTES{
             .nLength = @sizeOf(windows.SECURITY_ATTRIBUTES),
             .bInheritHandle = windows.TRUE,
@@ -946,8 +969,35 @@ pub const ChildProcess = struct {
         const cmd_line = try windowsCreateCommandLine(self.allocator, self.argv);
         defer self.allocator.free(cmd_line);
 
-        // TODO use explicit list of file handles
-        // https://devblogs.microsoft.com/oldnewthing/20111216-00/?p=8873
+        // see "Programmatically controlling which handles are inherited by
+        // new processes in Win32" by Raymond Chen
+        var attrib_list: ?windows.LPPROC_THREAD_ATTRIBUTE_LIST = null;
+        var size_attr_list: windows.SIZE_T = 0;
+        if (self.handles.?.len < 0xFFFF_FFFF / @sizeOf(windows.HANDLE)) {
+            @panic("invalidParamters"); // DEBUG
+        }
+        var suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
+        std.debug.assert(suc == 0); // DEBUG
+        attrib_list = try self.allocator.alloc(windows.LPPROC_THREAD_ATTRIBUTE_LIST, self.handles.?.len);
+        defer attrib_list.free(attrib_list);
+        suc = windows.kernel32.InitializeProcThreadAttributeList(null, 1, 0, &size_attr_list);
+        std.debug.assert(suc != 0); // DEBUG
+
+        const proc_thread_attr = windows.PROC_THREAD_ATTRIBUTE{
+            .NUMBER = .ProcThreadAttributeHandleList,
+            .ADDITIVE = false,
+            .THREAD = true,
+            .INPUT = false,
+        };
+        suc = windows.kernel32.UpdateProcThreadAttribute(
+            attrib_list,
+            0,
+            proc_thread_attr,
+            self.handles.?.ptr,
+            self.handles.?.len * @sizeOf(windows.HANDLE),
+            null,
+            null,
+        );
 
         var siStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
@@ -970,6 +1020,11 @@ pub const ChildProcess = struct {
             .cbReserved2 = 0,
             .lpReserved2 = null,
         };
+        var ext_info = windows.STARTUPINFOEXW{
+            .StartupInfo = siStartInfo,
+            .lpAttributeList = attrib_list,
+        };
+
         var piProcInfo: windows.PROCESS_INFORMATION = undefined;
 
         const cwd_w = if (self.cwd) |cwd| try unicode.utf8ToUtf16LeWithNull(self.allocator, cwd) else null;
@@ -1048,7 +1103,7 @@ pub const ChildProcess = struct {
                 dir_buf.shrinkRetainingCapacity(normalized_len);
             }
 
-            windowsCreateProcessPathExt(self.allocator, &dir_buf, &app_buf, PATHEXT, cmd_line_w.ptr, envp_ptr, cwd_w_ptr, &siStartInfo, &piProcInfo) catch |no_path_err| {
+            windowsCreateProcessPathExt(self.allocator, &dir_buf, &app_buf, PATHEXT, cmd_line_w.ptr, envp_ptr, cwd_w_ptr, &ext_info, &piProcInfo) catch |no_path_err| {
                 var original_err = switch (no_path_err) {
                     error.FileNotFound, error.InvalidExe, error.AccessDenied => |e| e,
                     error.UnrecoverableInvalidExe => return error.InvalidExe,
@@ -1074,7 +1129,7 @@ pub const ChildProcess = struct {
                     const normalized_len = windows.normalizePath(u16, dir_buf.items) catch continue;
                     dir_buf.shrinkRetainingCapacity(normalized_len);
 
-                    if (windowsCreateProcessPathExt(self.allocator, &dir_buf, &app_buf, PATHEXT, cmd_line_w.ptr, envp_ptr, cwd_w_ptr, &siStartInfo, &piProcInfo)) {
+                    if (windowsCreateProcessPathExt(self.allocator, &dir_buf, &app_buf, PATHEXT, cmd_line_w.ptr, envp_ptr, cwd_w_ptr, &ext_info, &piProcInfo)) {
                         break :exec;
                     } else |err| switch (err) {
                         error.FileNotFound, error.AccessDenied, error.InvalidExe => continue,
@@ -1132,7 +1187,7 @@ const PortPipeT = if (builtin.os.tag == .windows) [2]windows.HANDLE else [2]os.f
 
 /// Portable pipe creation without handle inheritance
 pub inline fn portablePipe() !PortPipeT {
-    // TODO think how to offer user an interface to lpSecurityDescriptor
+    // TODO offer user interface to lpSecurityDescriptor
     var pipe_new: PortPipeT = undefined;
     if (builtin.os.tag == .windows) {
         const saAttr = windows.SECURITY_ATTRIBUTES{
@@ -1159,7 +1214,7 @@ fn windowsCreateProcessPathExt(
     cmd_line: [*:0]u16,
     envp_ptr: ?[*]u16,
     cwd_ptr: ?[*:0]u16,
-    lpStartupInfo: *windows.STARTUPINFOW,
+    ext_info: *windows.STARTUPINFOEXW,
     lpProcessInformation: *windows.PROCESS_INFORMATION,
 ) !void {
     const app_name_len = app_buf.items.len;
@@ -1274,7 +1329,7 @@ fn windowsCreateProcessPathExt(
             try dir_buf.append(allocator, 0);
             const full_app_name = dir_buf.items[0 .. dir_buf.items.len - 1 :0];
 
-            if (windowsCreateProcess(full_app_name.ptr, cmd_line, envp_ptr, cwd_ptr, lpStartupInfo, lpProcessInformation)) |_| {
+            if (windowsCreateProcess(full_app_name.ptr, cmd_line, envp_ptr, cwd_ptr, ext_info, lpProcessInformation)) |_| {
                 return;
             } else |err| switch (err) {
                 error.FileNotFound,
@@ -1355,7 +1410,7 @@ fn windowsCreateProcessPathExt(
         try dir_buf.append(allocator, 0);
         const full_app_name = dir_buf.items[0 .. dir_buf.items.len - 1 :0];
 
-        if (windowsCreateProcess(full_app_name.ptr, cmd_line, envp_ptr, cwd_ptr, lpStartupInfo, lpProcessInformation)) |_| {
+        if (windowsCreateProcess(full_app_name.ptr, cmd_line, envp_ptr, cwd_ptr, ext_info, lpProcessInformation)) |_| {
             return;
         } else |err| switch (err) {
             error.FileNotFound => continue,
@@ -1376,7 +1431,16 @@ fn windowsCreateProcessPathExt(
     return unappended_err;
 }
 
-fn windowsCreateProcess(app_name: [*:0]u16, cmd_line: [*:0]u16, envp_ptr: ?[*]u16, cwd_ptr: ?[*:0]u16, lpStartupInfo: *windows.STARTUPINFOW, lpProcessInformation: *windows.PROCESS_INFORMATION) !void {
+fn windowsCreateProcess(
+    app_name: [*:0]u16,
+    cmd_line: [*:0]u16,
+    envp_ptr: ?[*]u16,
+    cwd_ptr: ?[*:0]u16,
+    ext_info: *windows.STARTUPINFOEXW,
+    lpProcessInformation: *windows.PROCESS_INFORMATION,
+) !void {
+    const CREATE_UNICODE_ENVIRONMENT = windows.PROCESS_CREATION_FLAGS.CREATE_UNICODE_ENVIRONMENT;
+    const EXTENDED_STARTUPINFO_PRESENT = windows.PROCESS_CREATION_FLAGS.EXTENDED_STARTUPINFO_PRESENT;
     // See https://stackoverflow.com/a/4207169/9306292
     // One can manually write in unicode even if one doesn't compile in unicode
     // (-DUNICODE).
@@ -1392,13 +1456,13 @@ fn windowsCreateProcess(app_name: [*:0]u16, cmd_line: [*:0]u16, envp_ptr: ?[*]u1
     return windows.CreateProcessW(
         app_name,
         cmd_line,
-        null,
-        null,
-        windows.TRUE,
-        windows.CREATE_UNICODE_ENVIRONMENT,
+        null, // lpProcessAttributes
+        null, // lpThreadAttributes
+        windows.TRUE, // bInheritHandles (explicit given as list)
+        @enumToInt(CREATE_UNICODE_ENVIRONMENT) | @enumToInt(EXTENDED_STARTUPINFO_PRESENT),
         @ptrCast(?*anyopaque, envp_ptr),
         cwd_ptr,
-        lpStartupInfo,
+        ext_info.lpStartupInfo,
         lpProcessInformation,
     );
 }
