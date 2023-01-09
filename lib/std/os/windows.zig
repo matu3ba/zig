@@ -1707,7 +1707,7 @@ pub const PROCESS_CREATION_FLAGS = enum(u32) {
 };
 // zig fmt: on
 
-pub const CreateProcessErrorW = error{
+pub const CreateProcessError = error{
     FileNotFound,
     AccessDenied,
     InvalidName,
@@ -1727,7 +1727,7 @@ pub fn CreateProcessW(
     lpCurrentDirectory: ?LPWSTR,
     lpStartupInfo: *STARTUPINFOW,
     lpProcessInformation: *PROCESS_INFORMATION,
-) CreateProcessErrorW!void {
+) CreateProcessError!void {
     if (kernel32.CreateProcessW(
         lpApplicationName,
         lpCommandLine,
@@ -1775,8 +1775,6 @@ pub fn CreateProcessW(
         }
     }
 }
-
-// pub const CreateProcessError = error {};
 
 pub const LoadLibraryError = error{
     FileNotFound,

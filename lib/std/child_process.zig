@@ -979,39 +979,45 @@ pub const ChildProcess = struct {
         // see "Programmatically controlling which handles are inherited by
         // new processes in Win32" by Raymond Chen
         var attrib_list: ?windows.LPPROC_THREAD_ATTRIBUTE_LIST = null;
-        var size_attr_list: windows.SIZE_T = 0;
-        // if (self.handles.?.len < 0xFFFF_FFFF / @sizeOf(windows.HANDLE)) {
-        //     @panic("invalidParamters"); // DEBUG
+        // if (self.count_handles > 0)
+        // var size_attr_list: windows.SIZE_T = 0;
+        // std.debug.print("self.handles.?.len: {d}\n",.{self.handles.?.len});
+        // const res = windows.InitializeProcThreadAttributeList(
+        //     null,
+        //     self.count_handles, 0,
+        //     &size_attr_list,
+        // );
+        // std.debug.print("res: {any}\n", .{res});
+        // std.debug.assert(size_attr_list > 0);
+        // std.debug.print("size_attr_list: {d}\n", .{size_attr_list});
+        // std.debug.assert(res == error.InsufficientBuffer);
+        // var attrib_list_block = try self.allocator.alloc(u8, self.handles.?.len);
+        // defer self.allocator.free(attrib_list_block);
+        // attrib_list = &attrib_list_block[0];
+        // const res2 = windows.InitializeProcThreadAttributeList(attrib_list,
+        //     self.count_handles,
+        //     0,
+        //     &size_attr_list,
+        // );
+        // std.debug.print("res2: {any}\n", .{res2});
+        // for (self.handles.?) |handle, i| {
+        //     std.debug.print("handle[{d}: {x}\n", .{i, handle});
         // }
-        const res = windows.InitializeProcThreadAttributeList(
-            null,
-            self.count_handles, 0,
-            &size_attr_list,
-        );
-        std.debug.print("res: {any}\n", .{res});
-        std.debug.assert(size_attr_list > 0);
-        std.debug.print("size_attr_list: {d}\n", .{size_attr_list});
-        std.debug.assert(res == error.InsufficientBuffer);
-        var attrib_list_block = try self.allocator.alloc(u8, self.handles.?.len);
-        defer self.allocator.free(attrib_list_block);
-        attrib_list = attrib_list_block.ptr;
-        const res2 = windows.InitializeProcThreadAttributeList(attrib_list,
-            self.count_handles,
-            0,
-            &size_attr_list,
-        );
-        std.debug.print("res2: {any}\n", .{res2});
-
-        const res3 = windows.UpdateProcThreadAttribute(
-            attrib_list,
-            0,
-            windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            @ptrCast(*anyopaque, self.handles.?.ptr),
-            self.handles.?.len * @sizeOf(windows.HANDLE),
-            null,
-            null,
-        );
-        std.debug.print("res3: {any}\n", .{res3});
+        // std.debug.assert(self.handles.?.len > 0);
+        // // std.debug.print("self.handles.?.len: {d}\n", self.handles.?.len);
+        //
+        // windows.UpdateProcThreadAttribute(
+        //     attrib_list,
+        //     0,
+        //     windows.PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+        //     @ptrCast(*anyopaque, &self.handles.?[0]),
+        //     self.handles.?.len * @sizeOf(windows.HANDLE),
+        //     null,
+        //     null,
+        // ) catch |err| {
+        //     std.debug.print("res3: {any}\n", .{err});
+        //     return err;
+        // };
 
         var lpStartInfo = windows.STARTUPINFOW{
             .cb = @sizeOf(windows.STARTUPINFOW),
@@ -1454,7 +1460,7 @@ fn windowsCreateProcess(
     lpProcessInformation: *windows.PROCESS_INFORMATION,
 ) !void {
     const CREATE_UNICODE_ENVIRONMENT = windows.PROCESS_CREATION_FLAGS.CREATE_UNICODE_ENVIRONMENT;
-    const EXTENDED_STARTUPINFO_PRESENT = windows.PROCESS_CREATION_FLAGS.EXTENDED_STARTUPINFO_PRESENT;
+    // const EXTENDED_STARTUPINFO_PRESENT = windows.PROCESS_CREATION_FLAGS.EXTENDED_STARTUPINFO_PRESENT;
     // See https://stackoverflow.com/a/4207169/9306292
     // One can manually write in unicode even if one doesn't compile in unicode
     // (-DUNICODE).
@@ -1473,7 +1479,8 @@ fn windowsCreateProcess(
         null, // lpProcessAttributes
         null, // lpThreadAttributes
         windows.TRUE, // bInheritHandles (explicit given as list)
-        @enumToInt(CREATE_UNICODE_ENVIRONMENT) | @enumToInt(EXTENDED_STARTUPINFO_PRESENT),
+        //@enumToInt(CREATE_UNICODE_ENVIRONMENT) | @enumToInt(EXTENDED_STARTUPINFO_PRESENT),
+        @enumToInt(CREATE_UNICODE_ENVIRONMENT),
         @ptrCast(?*anyopaque, envp_ptr),
         cwd_ptr,
         &ext_info.lpStartupInfo,
