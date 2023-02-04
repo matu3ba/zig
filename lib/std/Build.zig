@@ -1665,11 +1665,15 @@ pub const FileSource = union(enum) {
 /// Allocates a new string for assigning a value to a named macro.
 /// If the value is omitted, it is set to 1.
 /// `name` and `value` need not live longer than the function call.
-pub fn constructCMacro(allocator: Allocator, name: []const u8, value: ?[]const u8) []const u8 {
-    var macro = allocator.alloc(
+pub fn constructCMacro(
+    allocator: Allocator,
+    name: []const u8,
+    value: ?[]const u8,
+) error.OutOfMemorr![]const u8 {
+    var macro = try allocator.alloc(
         u8,
         name.len + if (value) |value_slice| value_slice.len + 1 else 0,
-    ) catch |err| if (err == error.OutOfMemory) @panic("Out of memory") else unreachable;
+    );
     mem.copy(u8, macro, name);
     if (value) |value_slice| {
         macro[name.len] = '=';
