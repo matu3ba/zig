@@ -389,17 +389,20 @@ threadlocal var panic_stage: usize = 0;
 pub fn panicImpl(trace: ?*const std.builtin.StackTrace, first_trace_addr: ?usize, msg: []const u8) noreturn {
     @setCold(true);
 
-    if (enable_segfault_handler) {
-        // If a segfault happens while panicking, we want it to actually segfault, not trigger
-        // the handler.
-        resetSegfaultHandler();
-    }
+    // If a segfault happens while panicking, we want to actually segfault and
+    // not to trigger the handler.
+    if (enable_segfault_handler) resetSegfaultHandler();
+    var thread_signal_mask: if (native_os != .windows) os.sigset_t else void = undefined;
+
+    // Another thread can spam signals to this one, so block signals until
+    // panic_stage update or dont't unblock if possible spam detected and only call abort.
+    if (native_os != .windows) os.sigprocmask(os.SIG.BLOCK, &os.all_mask, &thread_signal_mask);
 
     // Note there is similar logic in handleSegfaultPosix and handleSegfaultWindowsExtra.
     nosuspend switch (panic_stage) {
         0 => {
             panic_stage = 1;
-
+            if (native_os != .windows) os.sigprocmask(os.SIG.UNBLOCK, &thread_signal_mask, null);
             _ = panicking.fetchAdd(1, .SeqCst);
 
             // Make sure to release the mutex when done
@@ -425,15 +428,18 @@ pub fn panicImpl(trace: ?*const std.builtin.StackTrace, first_trace_addr: ?usize
         },
         1 => {
             panic_stage = 2;
+            if (native_os != .windows) os.sigprocmask(os.SIG.UNBLOCK, &thread_signal_mask, null);
 
             // A panic happened while trying to print a previous panic message,
-            // we're still holding the mutex but that's fine as we're going to
+            // we're still holding the Mutex but that's fine as we're going to
             // call abort()
             const stderr = io.getStdErr().writer();
             stderr.print("Panicked during a panic. Aborting.\n", .{}) catch os.abort();
         },
         else => {
             // Panicked while printing "Panicked during a panic."
+            // Don't re-enable signaling to this thread to prevent spammed signals
+            // causing stack overflows
         },
     };
 
@@ -2361,13 +2367,20 @@ fn resetSegfaultHandler() void {
         }
         return;
     }
-    var act = os.Sigaction{
-        .handler = .{ .handler = os.SIG.DFL },
-        .mask = os.empty_sigset,
-        .flags = 0,
-    };
-    // To avoid a double-panic, do nothing if an error happens here.
-    updateSegfaultHandler(&act) catch {};
+    {
+        // Block and restore thread signal mask for signal safety during resetting of segfault handler
+        var thread_signal_mask: os.sigset_t = undefined;
+        os.sigprocmask(os.SIG.BLOCK, &os.all_mask, &thread_signal_mask);
+        var act = os.Sigaction{
+            .handler = .{ .handler = os.SIG.DFL },
+            .mask = os.empty_sigset,
+            .flags = 0,
+        };
+
+        // To avoid a double-panic, do nothing if an error happens here.
+        updateSegfaultHandler(&act) catch {};
+        os.sigprocmask(os.SIG.UNBLOCK, &thread_signal_mask, null);
+    }
 }
 
 fn handleSegfaultPosix(sig: i32, info: *const os.siginfo_t, ctx_ptr: ?*const anyopaque) callconv(.C) noreturn {
