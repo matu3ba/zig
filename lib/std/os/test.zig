@@ -21,19 +21,25 @@ const tmpDir = std.testing.tmpDir;
 const Dir = std.fs.Dir;
 const ArenaAllocator = std.heap.ArenaAllocator;
 
+const Mutex = std.Thread.Mutex;
+
+// Prevent multiple threads running unit tests get clobbered file paths by chdir.
+// assume: During execution of os.chdir no other thread must read or write by
+// relative path unless via directory handle. This means, that during execution
+// of the test blocks in this files, no test blocks of another files are read,
+// for example the fs tests.
+var chdir_mutex: Mutex = .{};
+
 test "chdir smoke test" {
     if (native_os == .wasi) return error.SkipZigTest;
-
-    if (true) {
-        // https://github.com/ziglang/zig/issues/14968
-        return error.SkipZigTest;
-    }
 
     // Get current working directory path
     var old_cwd_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
     const old_cwd = try os.getcwd(old_cwd_buf[0..]);
 
     {
+        chdir_mutex.lock();
+        defer chdir_mutex.unlock();
         // Firstly, changing to itself should have no effect
         try os.chdir(old_cwd);
         var new_cwd_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
@@ -43,6 +49,9 @@ test "chdir smoke test" {
 
     // Next, change current working directory to one level above
     if (native_os != .wasi) { // WASI does not support navigating outside of Preopens
+        chdir_mutex.lock();
+        defer chdir_mutex.unlock();
+
         const parent = fs.path.dirname(old_cwd) orelse unreachable; // old_cwd should be absolute
         try os.chdir(parent);
 
@@ -56,6 +65,9 @@ test "chdir smoke test" {
 
     // Next, change current working directory to a temp directory one level below
     {
+        chdir_mutex.lock();
+        defer chdir_mutex.unlock();
+
         // Create a tmp directory
         var tmp_dir_buf: [fs.MAX_PATH_BYTES]u8 = undefined;
         var tmp_dir_path = path: {
@@ -88,6 +100,8 @@ test "chdir smoke test" {
 test "open smoke test" {
     if (native_os == .wasi) return error.SkipZigTest;
 
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
     // TODO verify file attributes using `fstat`
 
     var tmp = tmpDir(.{});
@@ -142,6 +156,8 @@ test "open smoke test" {
 test "openat smoke test" {
     if (native_os == .wasi and builtin.link_libc) return error.SkipZigTest;
 
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
     // TODO verify file attributes using `fstatat`
 
     var tmp = tmpDir(.{});
@@ -178,42 +194,35 @@ test "openat smoke test" {
 test "symlink with relative paths" {
     if (native_os == .wasi and builtin.link_libc) return error.SkipZigTest;
 
-    if (true) {
-        // https://github.com/ziglang/zig/issues/14968
-        return error.SkipZigTest;
-    }
-    const cwd = fs.cwd();
-    cwd.deleteFile("file.txt") catch {};
-    cwd.deleteFile("symlinked") catch {};
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+
+    var tmp = tmpDir(.{});
+    defer tmp.cleanup();
 
     // First, try relative paths in cwd
-    try cwd.writeFile("file.txt", "nonsense");
+    try tmp.dir.writeFile("file.txt", "nonsense");
 
     if (native_os == .windows) {
         os.windows.CreateSymbolicLink(
-            cwd.fd,
+            tmp.dir.fd,
             &[_]u16{ 's', 'y', 'm', 'l', 'i', 'n', 'k', 'e', 'd' },
             &[_]u16{ 'f', 'i', 'l', 'e', '.', 't', 'x', 't' },
             false,
         ) catch |err| switch (err) {
             // Symlink requires admin privileges on windows, so this test can legitimately fail.
             error.AccessDenied => {
-                try cwd.deleteFile("file.txt");
-                try cwd.deleteFile("symlinked");
                 return error.SkipZigTest;
             },
             else => return err,
         };
     } else {
-        try os.symlink("file.txt", "symlinked");
+        try os.symlink(&[_][]const u8{ tmp.sub_path, "file.txt" }, "symlinked");
     }
 
     var buffer: [fs.MAX_PATH_BYTES]u8 = undefined;
-    const given = try os.readlink("symlinked", buffer[0..]);
-    try expect(mem.eql(u8, "file.txt", given));
-
-    try cwd.deleteFile("file.txt");
-    try cwd.deleteFile("symlinked");
+    const given = try os.readlink(&[_][]const u8{ tmp.sub_path, "symlinked" }, buffer[0..]);
+    try expect(mem.eql(u8, &[_][]const u8{ tmp.sub_path, "file.txt" }, given));
 }
 
 test "readlink on Windows" {
@@ -241,6 +250,10 @@ test "link with relative paths" {
         // https://github.com/ziglang/zig/issues/14968
         return error.SkipZigTest;
     }
+    // file paths become cluttered, if chdir is executed in the meantime
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+    // TODO FIXME same here sus not deleted files in all cases
     var cwd = fs.cwd();
 
     cwd.deleteFile("example.txt") catch {};
@@ -284,6 +297,10 @@ test "linkat with different directories" {
         // https://github.com/ziglang/zig/issues/14968
         return error.SkipZigTest;
     }
+    // file paths become cluttered, if chdir is executed in the meantime
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+    // TODO FIXME same here sus not deleted files in all cases
     var cwd = fs.cwd();
     var tmp = tmpDir(.{});
 
@@ -321,6 +338,10 @@ test "fstatat" {
     // enable when `fstat` and `fstatat` are implemented on Windows
     if (native_os == .windows) return error.SkipZigTest;
 
+    // file paths become cluttered, if chdir is executed in the meantime
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+
     var tmp = tmpDir(.{});
     defer tmp.cleanup();
 
@@ -340,6 +361,10 @@ test "fstatat" {
 }
 
 test "readlinkat" {
+    // file paths become cluttered, if chdir is executed in the meantime
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+
     var tmp = tmpDir(.{});
     defer tmp.cleanup();
 
@@ -876,6 +901,7 @@ test "dup & dup2" {
         defer duped.close();
         try duped.writeAll("dup");
 
+        // TODO FIXME
         // Tests aren't run in parallel so using the next fd shouldn't be an issue.
         const new_fd = duped.handle + 1;
         try os.dup2(file.handle, new_fd);
@@ -973,6 +999,10 @@ test "POSIX file locking with fcntl" {
 test "rename smoke test" {
     if (native_os == .wasi) return error.SkipZigTest;
 
+    // file paths become cluttered, if chdir is executed in the meantime
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
+
     var tmp = tmpDir(.{});
     defer tmp.cleanup();
 
@@ -1028,6 +1058,8 @@ test "rename smoke test" {
 
 test "access smoke test" {
     if (native_os == .wasi) return error.SkipZigTest;
+    chdir_mutex.lock();
+    defer chdir_mutex.unlock();
 
     var tmp = tmpDir(.{});
     defer tmp.cleanup();
@@ -1110,18 +1142,9 @@ test "read with empty buffer" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Get base abs path
-    const base_path = blk: {
-        const relative_path = try fs.path.join(allocator, &[_][]const u8{ "zig-cache", "tmp", tmp.sub_path[0..] });
-        break :blk try fs.realpathAlloc(allocator, relative_path);
-    };
-
-    var file_path: []u8 = try fs.path.join(allocator, &[_][]const u8{ base_path, "some_file" });
-    var file = try fs.cwd().createFile(file_path, .{ .read = true });
+    var file = try tmp.dir.createFile("some_file", .{ .read = true });
     defer file.close();
-
     var bytes = try allocator.alloc(u8, 0);
-
     _ = try os.read(file.handle, bytes);
 }
 
@@ -1135,18 +1158,9 @@ test "pread with empty buffer" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Get base abs path
-    const base_path = blk: {
-        const relative_path = try fs.path.join(allocator, &[_][]const u8{ "zig-cache", "tmp", tmp.sub_path[0..] });
-        break :blk try fs.realpathAlloc(allocator, relative_path);
-    };
-
-    var file_path: []u8 = try fs.path.join(allocator, &[_][]const u8{ base_path, "some_file" });
-    var file = try fs.cwd().createFile(file_path, .{ .read = true });
+    var file = try tmp.dir.createFile("some_file", .{ .read = true });
     defer file.close();
-
     var bytes = try allocator.alloc(u8, 0);
-
     _ = try os.pread(file.handle, bytes, 0);
 }
 
@@ -1160,18 +1174,9 @@ test "write with empty buffer" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Get base abs path
-    const base_path = blk: {
-        const relative_path = try fs.path.join(allocator, &[_][]const u8{ "zig-cache", "tmp", tmp.sub_path[0..] });
-        break :blk try fs.realpathAlloc(allocator, relative_path);
-    };
-
-    var file_path: []u8 = try fs.path.join(allocator, &[_][]const u8{ base_path, "some_file" });
-    var file = try fs.cwd().createFile(file_path, .{});
+    var file = try tmp.dir.createFile("some_file", .{});
     defer file.close();
-
     var bytes = try allocator.alloc(u8, 0);
-
     _ = try os.write(file.handle, bytes);
 }
 
@@ -1185,18 +1190,9 @@ test "pwrite with empty buffer" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Get base abs path
-    const base_path = blk: {
-        const relative_path = try fs.path.join(allocator, &[_][]const u8{ "zig-cache", "tmp", tmp.sub_path[0..] });
-        break :blk try fs.realpathAlloc(allocator, relative_path);
-    };
-
-    var file_path: []u8 = try fs.path.join(allocator, &[_][]const u8{ base_path, "some_file" });
-    var file = try fs.cwd().createFile(file_path, .{});
+    var file = try tmp.dir.createFile("some_file", .{});
     defer file.close();
-
     var bytes = try allocator.alloc(u8, 0);
-
     _ = try os.pwrite(file.handle, bytes, 0);
 }
 
