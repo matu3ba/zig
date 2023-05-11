@@ -581,26 +581,6 @@ For example the number 0.2 is not accurately representable in binary data.
 
 Fixed-point fractional library routines
 
-Fixed-point arithmetic can use less bits in situation, where the scale of the numbers is known.
-It also allows simpler error analysis and techniques based on that as it accurately
-represents fractionals.
-Decimal float library routines are a special case of fixed point fractional arithmetic
-and typically a necessity for money-related applications (used in DPD encoding).
-Finally, it enables float-like behavior on targets without floating-point unit.
-All this comes at cost of more programmer care to avoid overflows in all intermediate
-values and extra code to adjust the scaling factors.
-
-See ISO/IEC DTR 18037 section "Fixed-point arithmetic" for context
-like the specification of `_Fract, _Accum, _Sat`.
-To keep this documentation and implementation dense, we define abbreviations:
-Let `fri16`, `fri32`, `fri64`, `fri128` and `fru16`, `fru32`, `fru64`, `fru128`
-be signed and unsigned fractionals.
-Let `aci16`, `aci32`, `aci64`, `aci128`, `acu16`, `acu32`, `acu64`, `acu128`
-be signed and unsigned accumulators.
-Let `satfri16`, `satfri32`,`satfri64`,`satfri128` be the corresponding saturated
-signed fractionals and likewise `satfruN`, `sataciN`, `satacuN` for
-`N in {16,32,64,128}`.
-
 | Done | Name            | a           | b           | Out         | Comment                           |
 | ---- | -----------     | ----------- | ----------- | ----------- | --------------------------------- |
 |   |                    |             |             |             |**Fixed-Point Conversion**         |
