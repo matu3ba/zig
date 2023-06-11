@@ -15,6 +15,27 @@ const Sign = enum {
     unsigned,
 };
 
+// simplified powi for positive exponents, base > 0
+fn powi(comptime base: comptime_int, comptime exp: comptime_int) comptime_int {
+    assert(exp >= 0);
+    var acc: comptime_int = 1;
+    while (exp > 1) {
+        if (exp & 1 == 1) {
+            acc = acc * base;
+        }
+        exp /= 2;
+        base = base * base;
+    }
+
+    // Deal with the final bit of the exponent separately, since
+    // squaring the base afterwards is not necessary and may cause a
+    // needless overflow.
+    if (exp == 1) {
+        acc = acc * base;
+    }
+    return acc;
+}
+
 /// Returns binary fixed point number methods including comptime-introspection.
 /// Fixed point number x = s * n * (b^f), so each digit is in [0,(b-1)], the
 /// factor describes the amounts of digits after the dot and nominator is the
@@ -60,18 +81,38 @@ pub fn FixPointNumber(
 
         pub fn init(fpn: *Fpn, from: anytype) void {
             const FromTI = @typeInfo(@TypeOf(from));
-            comptime assert(FromTI == .Float or FromTI == .Int);
-            // TODO comptime check, if number if representable
-            // switch (@typeInfo(FromTI)) {
-            //     .Int => |t_info| {
-            //         switch (t_info.signedness) {
-            //             .unsigned => {},
-            //             .signed => {},
-            //         }
-            //     },
-            //     .Float => {},
-            //     else => unreachable,
-            // }
+            const powi_base_fac = powi(base, factor);
+            // std.math.powi(comptime_int, base, factor) catch unreachable;
+
+            // check that number in range of type
+            comptime {
+                assert(FromTI == .Float or FromTI == .Int);
+                switch (FromTI) {
+                    .Int => {
+                        assert(std.math.minInt(@TypeOf(from)) * powi_base_fac >= std.math.minInt(DataT));
+                        assert(std.math.maxInt(@TypeOf(from)) * powi_base_fac <= std.math.maxInt(DataT));
+                    },
+                    .Float => {},
+                    else => unreachable,
+                }
+            }
+
+            // check that value in range of type, if comptime-known
+            if (@inComptime()) {
+                switch (FromTI) {
+                    .Int => {
+                        assert(from * powi_base_fac >= std.math.minInt(DataT));
+                        assert(from * powi_base_fac <= std.math.maxInt(DataT));
+                    },
+                    .Float => {},
+                    else => unreachable,
+                }
+            }
+
+            // assign value
+            // cases:
+            // - 1. decimal 123,123
+            //   * TODO see arbitrary number system and convert it to be used on binary data + shifts
             fpn.data = from;
         }
 
