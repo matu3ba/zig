@@ -39,7 +39,8 @@ comptime {
             if (builtin.os.tag == .linux) {
                 @export(__aeabi_read_tp, .{ .name = "__aeabi_read_tp", .linkage = common.linkage, .visibility = common.visibility });
             }
-
+            // floating-point helper functions (single-precision reverse subtraction, y – x), see subsf3.zig
+            @export(__aeabi_frsub, .{ .name = "__aeabi_frsub", .linkage = common.linkage, .visibility = common.visibility });
             // floating-point helper functions (double-precision reverse subtraction, y – x), see subdf3.zig
             @export(__aeabi_drsub, .{ .name = "__aeabi_drsub", .linkage = common.linkage, .visibility = common.visibility });
         }
@@ -191,7 +192,80 @@ pub fn __aeabi_ldivmod() callconv(.Naked) void {
     unreachable;
 }
 
+// Float Comparison (ported from https://github.com/llvm-mirror/compiler-rt/blob/release_80/lib/builtins/arm/)
+// pub fn __aeabi_cfcmpeq() callconv(.Naked) void {
+//     @setRuntimeSafety(false);
+//     // Divide r1:r0 by r3:r2; the quotient goes in r1:r0, the remainder in r3:r2
+//     asm volatile (
+//         \\ push {r4, lr}
+//         \\ sub sp, #16
+//         \\ add r4, sp, #8
+//         \\ str r4, [sp]
+//         \\ bl  __divmoddi4
+//         \\ ldr r2, [sp, #8]
+//         \\ ldr r3, [sp, #12]
+//         \\ add sp, #16
+//         \\ pop {r4, pc}
+//         ::: "memory");
+//     unreachable;
+// }
+// __aeabi_cfcmpeq
+// __aeabi_cfcmple
+// __aeabi_cfrcmple
+// __aeabi_cdcmpeq
+// __aeabi_cdcmple
+// __aeabi_cdrcmple
+
+// Float Arithmetic
+
+pub fn __aeabi_frsub(a: f32, b: f32) callconv(.AAPCS) f32 {
+    const neg_a: f32 = @bitCast(@as(u32, @bitCast(a)) ^ (@as(u32, 1) << 31));
+    return b + neg_a;
+}
+
 pub fn __aeabi_drsub(a: f64, b: f64) callconv(.AAPCS) f64 {
     const neg_a: f64 = @bitCast(@as(u64, @bitCast(a)) ^ (@as(u64, 1) << 63));
     return b + neg_a;
 }
+
+// tests in
+// - udivmoddi4_test.zig
+// - udivmodti4_test.zig
+// - TODO idivmoddi4_test.zig
+// - TODO idivmodti4_test.zig
+// same tests as for in udivmoddi4_test.zig and udivmodti4_test.zig
+
+// test "arm tests" {
+//     if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+//     { // known to work example to test AAPCS abi.
+//         var src_data = "file";
+//         var dest_buf: [10]u8 = undefined;
+//         __aeabi_memcpy(&dest_buf, @constCast(src_data.ptr), src_data.len);
+//         try testing.expectEqualSlices(u8, src_data, dest_buf[0..src_data.len]);
+//     }
+//     // __aeabi_cfcmpeq
+//     // __aeabi_cfcmple
+//     // __aeabi_cfrcmple
+//     // __aeabi_cdcmpeq
+//     // __aeabi_cdcmple
+//     // __aeabi_cdrcmple
+//
+//     // Divide r1:r0 by r3:r2; the quotient goes in r1:r0, the remainder in r3:r2
+//     { // __aeabi_ldivmod
+//         const ldivmod = @as(*const fn (a: i64, b: i64) .{ i64, i64 }, @ptrCast(&__aeabi_ldivmod));
+//         _ = ldivmod;
+//         // TODO complete this
+//     }
+//     { // __aeabi_uldivmod
+//     }
+//     { // __aeabi_idivmod
+//     }
+//     { // __aeabi_uidivmod
+//     }
+//     { // __aeabi_frsub
+//     }
+//     { // __aeabi_drsub
+//     }
+//
+//     // TODO https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
+// }
