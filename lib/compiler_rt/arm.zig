@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const arch = builtin.cpu.arch;
 const common = @import("common.zig");
+const testing = std.testing;
 
 pub const panic = common.panic;
 
@@ -228,44 +229,36 @@ pub fn __aeabi_drsub(a: f64, b: f64) callconv(.AAPCS) f64 {
     return b + neg_a;
 }
 
-// tests in
-// - udivmoddi4_test.zig
-// - udivmodti4_test.zig
 // - TODO idivmoddi4_test.zig
 // - TODO idivmodti4_test.zig
-// same tests as for in udivmoddi4_test.zig and udivmodti4_test.zig
 
-// test "arm tests" {
-//     if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
-//     { // known to work example to test AAPCS abi.
-//         var src_data = "file";
-//         var dest_buf: [10]u8 = undefined;
-//         __aeabi_memcpy(&dest_buf, @constCast(src_data.ptr), src_data.len);
-//         try testing.expectEqualSlices(u8, src_data, dest_buf[0..src_data.len]);
-//     }
-//     // __aeabi_cfcmpeq
-//     // __aeabi_cfcmple
-//     // __aeabi_cfrcmple
-//     // __aeabi_cdcmpeq
-//     // __aeabi_cdcmple
-//     // __aeabi_cdrcmple
-//
-//     // Divide r1:r0 by r3:r2; the quotient goes in r1:r0, the remainder in r3:r2
-//     { // __aeabi_ldivmod
-//         const ldivmod = @as(*const fn (a: i64, b: i64) .{ i64, i64 }, @ptrCast(&__aeabi_ldivmod));
-//         _ = ldivmod;
-//         // TODO complete this
-//     }
-//     { // __aeabi_uldivmod
-//     }
-//     { // __aeabi_idivmod
-//     }
-//     { // __aeabi_uidivmod
-//     }
-//     { // __aeabi_frsub
-//     }
-//     { // __aeabi_drsub
-//     }
-//
-//     // TODO https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
-// }
+// - __aeabi_uidivmod in udivmodsi4_test.zig,
+// - __aeabi_uldivmod in udivmoddi4_test.zig
+// - __aeabi_idivmod in int.zig
+// - __aeabi_ldivmod in int.zig
+test "arm tests" {
+    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+    { // known to work example to test AAPCS abi.
+        var src_data = "file";
+        var dest_buf: [10]u8 = undefined;
+        __aeabi_memcpy(&dest_buf, @constCast(src_data.ptr), src_data.len);
+        try testing.expectEqualSlices(u8, src_data, dest_buf[0..src_data.len]);
+    }
+    //     // __aeabi_cfcmpeq
+    //     // __aeabi_cfcmple
+    //     // __aeabi_cfrcmple
+    //     // __aeabi_cdcmpeq
+    //     // __aeabi_cdcmple
+    //     // __aeabi_cdrcmple
+    //
+    { // __aeabi_frsub
+        const frsub = 1;
+        _ = frsub;
+    }
+    { // __aeabi_drsub
+        const drsub = 1;
+        _ = drsub;
+    }
+    //
+    //     // TODO https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
+}
