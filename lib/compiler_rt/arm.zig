@@ -193,23 +193,48 @@ pub fn __aeabi_ldivmod() callconv(.Naked) void {
     unreachable;
 }
 
-// Float Comparison (ported from https://github.com/llvm-mirror/compiler-rt/blob/release_80/lib/builtins/arm/)
-// pub fn __aeabi_cfcmpeq() callconv(.Naked) void {
-//     @setRuntimeSafety(false);
-//     // Divide r1:r0 by r3:r2; the quotient goes in r1:r0, the remainder in r3:r2
-//     asm volatile (
-//         \\ push {r4, lr}
-//         \\ sub sp, #16
-//         \\ add r4, sp, #8
-//         \\ str r4, [sp]
-//         \\ bl  __divmoddi4
-//         \\ ldr r2, [sp, #8]
-//         \\ ldr r3, [sp, #12]
-//         \\ add sp, #16
-//         \\ pop {r4, pc}
-//         ::: "memory");
-//     unreachable;
-// }
+// Float Comparisons (ported from https://github.com/llvm-mirror/compiler-rt/blob/release_80/lib/builtins/arm/)
+
+const APSR_Z = 1 << 30;
+const APSR_C = 1 << 29;
+
+// TODO fn __aeabi_cfcmpeq_check_nan
+// TODO IT
+// TODO APSR_nzcvq
+
+pub fn __aeabi_cfcmpeq() callconv(.Naked) void {
+    comptime if (builtin.cpu.arch.isThumb()) @compileError("thumb1 and thumb2 unsupported");
+    @setRuntimeSafety(false);
+    // if (math.isNan(a) || math.isNan(b)) {
+    //     Z = 0; C = 1;
+    // } else {
+    //     _aeabi_cfmcple(a, b);
+    // }
+    // Results in Application Processor Status Register (ASPR) Z and C.
+    asm volatile (
+        \\ push {r0-r3, lr}
+        \\ bl __aeabi_cfcmpeq_check_nan
+        \\ cmp r0, #1
+        \\ pop {r0-r3, lr}
+        \\ // NaN has been ruled out, so __aeabi_cfcmple can't trap
+        \\ // Use "it ne" + unconditional branch to guarantee a supported relocation if
+        \\ // __aeabi_cfcmple is in a different section for some builds.
+        \\ IT(ne)
+        \\ bne __aeabi_cfcmple
+        \\ msr APSR_nzcvq, #APSR_C
+        \\ JMP(lr)
+        ::: "memory");
+    unreachable;
+}
+
+pub fn __aeabi_cfcmple() callconv(.Naked) void {
+    comptime if (builtin.cpu.arch.isThumb()) @compileError("thumb1 and thumb2 unsupported");
+    @setRuntimeSafety(false);
+    asm volatile (
+        \\ Grossly wrong
+        ::: "memory");
+}
+
 // __aeabi_cfcmpeq
 // __aeabi_cfcmple
 // __aeabi_cfrcmple
@@ -229,13 +254,11 @@ pub fn __aeabi_drsub(a: f64, b: f64) callconv(.AAPCS) f64 {
     return b + neg_a;
 }
 
-// - TODO idivmoddi4_test.zig
-// - TODO idivmodti4_test.zig
-
 // - __aeabi_uidivmod in udivmodsi4_test.zig,
 // - __aeabi_uldivmod in udivmoddi4_test.zig
 // - __aeabi_idivmod in int.zig
 // - __aeabi_ldivmod in int.zig
+
 test "arm tests" {
     if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
     { // known to work example to test AAPCS abi.
