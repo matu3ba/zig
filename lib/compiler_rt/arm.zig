@@ -198,28 +198,30 @@ pub fn __aeabi_ldivmod() callconv(.Naked) void {
 const APSR_Z = 1 << 30;
 const APSR_C = 1 << 29;
 
-// TODO fn __aeabi_cfcmpeq_check_nan
-// TODO IT
-// TODO APSR_nzcvq
+const isNanf32 = std.math.isNan(f32);
+const __aeabi_fcmpeq = @import("cmpsf2.zig").__aeabi_fcmpeq;
+const __aeabi_fcmplt = @import("cmpsf2.zig").__aeabi_fcmpeq;
 
-pub fn __aeabi_cfcmpeq() callconv(.Naked) void {
+/// non-excepting equality comparison [1], result in PSR ZC flags
+fn __aeabi_cfcmpeq() callconv(.Naked) void {
     comptime if (builtin.cpu.arch.isThumb()) @compileError("thumb1 and thumb2 unsupported");
+    comptime if (builtin.cpu.arch.endian() != .Little) @compileError("only little endian supported");
     @setRuntimeSafety(false);
     // if (math.isNan(a) || math.isNan(b)) {
     //     Z = 0; C = 1;
     // } else {
-    //     _aeabi_cfmcple(a, b);
+    //     __aeabi_cfcmple(a, b);
     // }
     // Results in Application Processor Status Register (ASPR) Z and C.
     asm volatile (
         \\ push {r0-r3, lr}
-        \\ bl __aeabi_cfcmpeq_check_nan
+        \\ bl isNanf32
         \\ cmp r0, #1
         \\ pop {r0-r3, lr}
         \\ // NaN has been ruled out, so __aeabi_cfcmple can't trap
         \\ // Use "it ne" + unconditional branch to guarantee a supported relocation if
         \\ // __aeabi_cfcmple is in a different section for some builds.
-        \\ IT(ne)
+        \\ it ne
         \\ bne __aeabi_cfcmple
         \\ msr APSR_nzcvq, #APSR_C
         \\ JMP(lr)
@@ -230,17 +232,43 @@ pub fn __aeabi_cfcmpeq() callconv(.Naked) void {
 pub fn __aeabi_cfcmple() callconv(.Naked) void {
     comptime if (builtin.cpu.arch.isThumb()) @compileError("thumb1 and thumb2 unsupported");
     @setRuntimeSafety(false);
+    //   if (__aeabi_fcmplt(a, b)) {
+    //     Z = 0; C = 0;
+    //   } else if (__aeabi_fcmpeq(a, b)) {
+    //     Z = 1; C = 1;
+    //   } else {
+    //     Z = 0; C = 1;
+    //   }
+    // }
     asm volatile (
-        \\ Grossly wrong
+        \\ push {r0-r3, lr}
+        \\ bl __aeabi_fcmplt
+        \\ cmp r0, #1
+        \\ itt eq
+        \\ moveq ip, #0
+        \\ beq 1f
+        \\ ldm sp, {r0-r3}
+        \\ bl __aeabi_fcmpeq
+        \\ cmp r0, #1
+        \\ ite eq
+        \\ moveq ip, #(APSR_C | APSR_Z)
+        \\ movne ip, #(APSR_C)
+        \\ 1:
+        \\ msr APSR_nzcvq, ip
+        \\ pop {r0-r3}
+        \\ pop {pc}
         ::: "memory");
 }
 
-// __aeabi_cfcmpeq
-// __aeabi_cfcmple
-// __aeabi_cfrcmple
-// __aeabi_cdcmpeq
-// __aeabi_cdcmple
-// __aeabi_cdrcmple
+// reversed __aeabi_cfcmple
+pub fn __aeabi_cfrcmple(a: f32, b: f32) callconv(.AAPCS) i32 {
+    const actualAeabi_cfcmple = @as(*const fn (a: f32, b: f32) callconv(.AAPCS) i32, @ptrCast(&__aeabi_cfcmple));
+    return actualAeabi_cfcmple(b, a);
+}
+
+// __aeabi_cdcmpeq TODO implement
+// __aeabi_cdcmple TODO implement
+// __aeabi_cdrcmple TODO implement
 
 // Float Arithmetic
 
@@ -267,9 +295,6 @@ test "arm tests" {
         __aeabi_memcpy(&dest_buf, @constCast(src_data.ptr), src_data.len);
         try testing.expectEqualSlices(u8, src_data, dest_buf[0..src_data.len]);
     }
-    //     // __aeabi_cfcmpeq
-    //     // __aeabi_cfcmple
-    //     // __aeabi_cfrcmple
     //     // __aeabi_cdcmpeq
     //     // __aeabi_cdcmple
     //     // __aeabi_cdrcmple
@@ -284,4 +309,16 @@ test "arm tests" {
     }
     //
     //     // TODO https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
+}
+
+test "__aeabi_cfcmpeq" {
+    // TODO
+}
+
+test "__aeabi_cfcmple" {
+    // TODO
+}
+
+test "__aeabi_cfrcmple" {
+    // TODO
 }

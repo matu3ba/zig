@@ -55,11 +55,12 @@ pub fn __ltsf2(a: f32, b: f32) callconv(.C) i32 {
     return __cmpsf2(a, b);
 }
 
-fn __aeabi_fcmpeq(a: f32, b: f32) callconv(.AAPCS) i32 {
+/// Result (1, 0) denotes (=, ?<>) [2], use for C == and !=
+pub fn __aeabi_fcmpeq(a: f32, b: f32) callconv(.AAPCS) i32 {
     return @intFromBool(comparef.cmpf2(f32, comparef.LE, a, b) == .Equal);
 }
 
-fn __aeabi_fcmplt(a: f32, b: f32) callconv(.AAPCS) i32 {
+pub fn __aeabi_fcmplt(a: f32, b: f32) callconv(.AAPCS) i32 {
     return @intFromBool(comparef.cmpf2(f32, comparef.LE, a, b) == .Less);
 }
 
