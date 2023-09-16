@@ -287,7 +287,15 @@ pub fn __aeabi_drsub(a: f64, b: f64) callconv(.AAPCS) f64 {
 // - __aeabi_idivmod in int.zig
 // - __aeabi_ldivmod in int.zig
 
-test "arm tests" {
+// TODO later
+//fn test__aeabi_cfcmpeq() callconv(.Naked) void {
+//}
+//
+//test "__aeabi_cfcmpeq" {
+//    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+//}
+
+test "testing arm works" {
     if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
     { // known to work example to test AAPCS abi.
         var src_data = "file";
@@ -295,30 +303,33 @@ test "arm tests" {
         __aeabi_memcpy(&dest_buf, @constCast(src_data.ptr), src_data.len);
         try testing.expectEqualSlices(u8, src_data, dest_buf[0..src_data.len]);
     }
-    //     // __aeabi_cdcmpeq
-    //     // __aeabi_cdcmple
-    //     // __aeabi_cdrcmple
-    //
-    { // __aeabi_frsub
-        const frsub = 1;
-        _ = frsub;
-    }
-    { // __aeabi_drsub
-        const drsub = 1;
-        _ = drsub;
-    }
-    //
-    //     // TODO https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
 }
 
-test "__aeabi_cfcmpeq" {
+fn test__aeabi_cfcmple() callconv(.Naked) void {
     // TODO
 }
 
 test "__aeabi_cfcmple" {
+    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+    // TODO
+}
+
+fn test__aeabi_cfrcmple() callconv(.Naked) void {
     // TODO
 }
 
 test "__aeabi_cfrcmple" {
+    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
     // TODO
 }
+
+test "__aeabi_frsub" {
+    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+}
+
+test "__aeabi_drsub" {
+    if (!builtin.cpu.arch.isARM()) return error.SkipZigTest;
+    // TODO
+}
+
+// TODO port things from https://github.com/llvm-mirror/compiler-rt/tree/release_80/test/builtins/Unit/arm
