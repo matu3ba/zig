@@ -18,28 +18,47 @@ const Sign = enum {
 // simplified powi for positive exponents, base > 0
 fn powi(comptime base: comptime_int, comptime exp: comptime_int) comptime_int {
     assert(exp >= 0);
+    var _exp = exp;
+    var _base = base;
     var acc: comptime_int = 1;
-    while (exp > 1) {
-        if (exp & 1 == 1) {
-            acc = acc * base;
+    while (_exp > 1) {
+        if (_exp & 1 == 1) {
+            acc = acc * _base;
         }
-        exp /= 2;
-        base = base * base;
+        _exp /= 2;
+        _base = _base * _base;
     }
 
     // Deal with the final bit of the exponent separately, since
-    // squaring the base afterwards is not necessary and may cause a
+    // squaring the _base afterwards is not necessary and may cause a
     // needless overflow.
-    if (exp == 1) {
-        acc = acc * base;
+    if (_exp == 1) {
+        acc = acc * _base;
     }
     return acc;
 }
 
-/// Returns binary fixed point number methods including comptime-introspection.
+/// Returns arbitrary fixed point number methods including comptime-introspection.
 /// Fixed point number x = s * n * (b^f), so each digit is in [0,(b-1)], the
-/// factor describes the amounts of digits after the dot and nominator is the
+/// factor describes the amounts of digits after the dot and nominator n is the
 /// number without scaling with (b^f).
+///
+/// Values can be set and get in the base number system ('getBase', 'setBase')
+/// or in the fixed-point ('getFp', 'setFp') or with the according checked
+/// ('getBaseChecked', ..) and lossy methods ('getBaseLossy', ..).
+///
+/// Consider 'x = + * 8 *(10^2)'. Then [0..max(u3)]*100 is the assignable range.
+/// For (10^-2), [0..max(u3)]/100 is the assignable range.
+/// 'setBase' would then set [0..max(u3)], whereas 'setFp' would set for the
+/// former scale fp=(base*100) and internally base=(fp/100).
+/// 'getBase' and 'getFp' work likewise.
+///
+/// Internally, digits are repesented as power of two, so for exmaple the number
+/// 19 in decimal has the underlying representation 0b0001_1001.
+/// Customized, more space efficient base encodings, like wise by IBM hardware
+/// for decimals are not supported to keep the code simple.
+///
+/// TODO: explain how user must deal with loss of precision
 /// TODO: hardware detection + figure out how the hw instructions on x86 work
 pub fn FixPointNumber(
     comptime sign: std.builtin.Signedness,
@@ -79,46 +98,91 @@ pub fn FixPointNumber(
             return factor;
         }
 
-        pub fn init(fpn: *Fpn, from: anytype) void {
+        pub fn setBase(fpn: *Fpn, from: anytype) void {
+            _ = from;
+            _ = fpn;
+        }
+
+        pub fn getBase(fpn: *Fpn, from: anytype) void {
+            _ = from;
+            _ = fpn;
+        }
+
+        pub fn setFp(fpn: *Fpn, from: anytype) void {
+            _ = from;
+            _ = fpn;
+        }
+
+        pub fn getFp(fpn: *Fpn, from: anytype) void {
+            _ = from;
+            _ = fpn;
+        }
+
+        // TODO min, max
+
+        /// This comptime checks that range of init type fits into the range
+        /// and may prevent valid runtime initializations as it is optimized
+        /// for no overhead and safety.
+        ///
+        /// Potential unsafe initialization can use direct field access.
+        pub fn set(fpn: *Fpn, comptime is_fp: bool, from: anytype) void {
             const FromTI = @typeInfo(@TypeOf(from));
             const powi_base_fac = powi(base, factor);
             // std.math.powi(comptime_int, base, factor) catch unreachable;
 
-            // check that number in range of type
-            comptime {
-                assert(FromTI == .Float or FromTI == .Int);
+            if (!@inComptime()) { // check that number in range of type, if runtime called
+                comptime {
+                    assert(FromTI == .Float or FromTI == .Int);
+                    switch (FromTI) {
+                        .Int => {
+                            const min_int_scaled_from = std.math.minInt(@TypeOf(from)) * powi_base_fac;
+                            const max_int_scaled_from = std.math.maxInt(@TypeOf(from)) * powi_base_fac;
+                            if (min_int_scaled_from < std.math.minInt(DataT)) {
+                                @compileLog("can not comptime guarantee range size fitting");
+                                @compileLog(min_int_scaled_from, "<", std.math.minInt(DataT));
+                            }
+                            if (max_int_scaled_from > std.math.maxInt(DataT)) {
+                                @compileLog("can not comptime guarantee range size fitting");
+                                @compileLog(max_int_scaled_from, ">", std.math.maxInt(DataT));
+                            }
+                            // assert(std.math.minInt(@TypeOf(from)) * powi_base_fac >= std.math.minInt(DataT));
+                            // assert(std.math.maxInt(@TypeOf(from)) * powi_base_fac <= std.math.maxInt(DataT));
+                        },
+                        .Float => {},
+                        else => unreachable,
+                    }
+                }
+            }
+
+            if (@inComptime()) { // check that value in range of type, if comptime-known
                 switch (FromTI) {
                     .Int => {
-                        assert(std.math.minInt(@TypeOf(from)) * powi_base_fac >= std.math.minInt(DataT));
-                        assert(std.math.maxInt(@TypeOf(from)) * powi_base_fac <= std.math.maxInt(DataT));
+                        const mul_ov = @mulWithOverflow(from, powi_base_fac);
+                        if (mul_ov[1] != 0) @compileLog(from, "*", powi_base_fac, "overflow");
+                        // assert(from * powi_base_fac >= std.math.minInt(DataT), "@TypoeOf(DataT)");
+                        if (mul_ov[0] < std.math.minInt(DataT)) {
+                            @compileLog(from, "*", powi_base_fac, "<", std.math.minInt(DataT), DataT);
+                        }
+                        // assert(from * powi_base_fac <= std.math.maxInt(DataT), "@TypoeOf(DataT)");
+                        if (mul_ov[0] > std.math.maxInt(DataT)) {
+                            @compileLog(from, "*", powi_base_fac, ">", std.math.maxInt(DataT), DataT);
+                        }
                     },
                     .Float => {},
                     else => unreachable,
                 }
             }
 
-            // check that value in range of type, if comptime-known
-            if (@inComptime()) {
-                switch (FromTI) {
-                    .Int => {
-                        assert(from * powi_base_fac >= std.math.minInt(DataT));
-                        assert(from * powi_base_fac <= std.math.maxInt(DataT));
-                    },
-                    .Float => {},
-                    else => unreachable,
-                }
+            // TODO decimal, because this only implements binary
+            if (is_fp) {
+                fpn.data = from;
+            } else {
+                fpn.data = from * powi_base_fac;
             }
-
-            // assign value
-            // cases:
-            // - 1. decimal 123,123
-            //   * TODO see arbitrary number system and convert it to be used on binary data + shifts
-            fpn.data = from;
         }
 
         pub fn to(comptime T: type) T {
             // t1
-
         }
         pub fn checkedTo(comptime T: type) !T {
             // t1
@@ -128,11 +192,12 @@ pub fn FixPointNumber(
 
         }
 
-        // TODO: These are the tricky ones with comptime, since
-        // we must do comptime field acess according to our layout
-        // TODO: How much validation do we want to do?
-        pub fn add(comptime T: type) !T {
-            // t1
+        pub fn add(fpn1: Fpn, fpn2: Fpn) Fpn {
+            // std.debug.print("fpn1: {}, fpn2: {}\n", .{ @TypeOf(fpn1.data), @TypeOf(fpn2.data) });
+            // std.debug.print("fpn1: {d}, fpn2: {d}\n", .{ fpn1.data, fpn2.data });
+            return Fpn{
+                .data = fpn1.data + fpn2.data,
+            };
         }
         // checkedAdd
         // lossyAdd
@@ -173,13 +238,6 @@ test "sizes typeA binary fixed-point number" {
         assert(Bin_u1.cBase() == @as(u32, 2));
         assert(Bin_u1.cFactor() == @as(u32, 0));
     }
-
-    var biu1: Bin_u1 = undefined;
-    const bu1: u1 = 1;
-    biu1.init(bu1);
-
-    // try testing.expect(@typeInfo(Bin_i1).Struct.fields[0].type == i1);
-    // try testing.expect(@typeInfo(Bin_u1).Struct.fields[0].type == u1);
 }
 
 test "sizes typeB binary fixed-point number" {
@@ -238,3 +296,82 @@ test "size typeB decimal fixed-point number" {
         assert(Dec_u4_2.cFactor() == @as(u32, 2));
     }
 }
+
+test "add typeA_bin typeB_bin typeA_dec typeB_dec" {
+    const Bin_i6_2 = FixPointNumber(.signed, 6, 2, 0); // i6 with 2**0=1 as factor
+    const Bin_i6_2_2 = FixPointNumber(.signed, 6, 2, 2); // i6 with 2**2 as factor
+    // const Dec_i6_2 = FixPointNumber(.signed, 10, 10, 0);
+
+    comptime {
+        { // add typeA_bin typeA_bin
+            var bi6_n1: Bin_i6_2 = undefined;
+            var bi6_n2: Bin_i6_2 = undefined;
+            bi6_n1.init(@as(u5, 10));
+            bi6_n2.init(@as(u5, 11));
+            const res_typeA_bin = bi6_n1.add(bi6_n2);
+            assert(res_typeA_bin.data == 21);
+        }
+        { // add typeB_bin typeB_bin
+            var bi6_2_n1: Bin_i6_2_2 = undefined;
+            var bi6_2_n2: Bin_i6_2_2 = undefined;
+            bi6_2_n1.init(@as(u6, 5));
+            bi6_2_n2.init(@as(u6, 6));
+            const res_typeB_bin = bi6_2_n1.add(bi6_2_n2);
+            assert(res_typeB_bin.data == 11); // TODO scale up etc
+        }
+        // { // add typeB_bin typeA_bin
+        //     var bi6_n1: Bin_i6_2 = undefined;
+        //     var bi6_n2: Bin_i6_2 = undefined;
+        //     bi6_n1.init(@as(u5, 10));
+        //     bi6_n2.init(@as(u5, 11));
+        //     const res_typeA_bin = bi6_n1.add(bi6_n2);
+        //     assert(res_typeA_bin.data == 21);
+        // }
+    }
+
+    { // add typeA_bin typeA_bin
+        var bi6_n1: Bin_i6_2 = undefined;
+        var bi6_n2: Bin_i6_2 = undefined;
+        bi6_n1.init(@as(u5, 10));
+        bi6_n2.init(@as(u5, 11));
+        const res_typeA_bin = bi6_n1.add(bi6_n2);
+        assert(res_typeA_bin.data == 21);
+    }
+}
+
+test "sub typeA_bin typeB_bin typeA_dec typeB_dec" {
+    comptime {
+        // sub typeA_bin typeA_bin
+        // ..
+    }
+
+    // sub typeA_bin typeA_bin
+    // ..
+}
+
+test "mul typeA_bin typeB_bin typeA_dec typeB_dec" {
+    comptime {
+        // mul typeA_bin typeA_bin
+        // ..
+    }
+
+    // mul typeA_bin typeA_bin
+    // ..
+}
+
+test "div typeA_bin typeB_bin typeA_dec typeB_dec" {
+    comptime {
+        // div typeA_bin typeA_bin
+        // ..
+    }
+
+    // div typeA_bin typeA_bin
+    // ..
+}
+
+// TODO how to infer result location type with @as() ?
+// pub fn getBase(fpn: *Fpn, from: anytype) anytype {
+//     _ = from;
+//     _ = fpn;
+//
+// }
